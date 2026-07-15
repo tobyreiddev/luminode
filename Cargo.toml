@@ -1,0 +1,6 @@
+# Workspace root: the Tauri app core and the lightctl CLI share one lockfile
+# and target directory. The firmware (firmware/) is Arduino C++ and lives
+# outside cargo entirely.
+[workspace]
+resolver = "2"
+members = ["app/src-tauri", "cli/lightctl"]

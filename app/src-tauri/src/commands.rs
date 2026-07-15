@@ -1,0 +1,421 @@
+//! Tauri commands — the UI's entire surface area into the core. The UI
+//! stays a thin layer: every command delegates to the store, trigger
+//! engine, or device manager.
+
+use std::sync::atomic::Ordering;
+use tauri::State;
+
+use crate::animation::AnimSpec;
+use crate::device::{DeviceMsg, DeviceStatus, PortCandidate};
+use crate::events::Event;
+use crate::store::{Animation, Schedule, Trigger};
+use crate::triggers::ActiveState;
+use crate::AppState;
+
+#[tauri::command]
+pub fn get_status(state: State<AppState>) -> DeviceStatus {
+    state.device_status.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn list_candidates(state: State<AppState>) -> Vec<PortCandidate> {
+    state.candidates.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn adopt_device(state: State<AppState>, port: String) {
+    let _ = state.device_tx.try_send(DeviceMsg::Adopt(port));
+}
+
+#[tauri::command]
+pub fn forget_device(state: State<AppState>) {
+    let _ = state.device_tx.try_send(DeviceMsg::Forget);
+}
+
+#[tauri::command]
+pub fn set_manual(state: State<AppState>, spec: AnimSpec) {
+    // Hand-built manual state pins until released; only animation Apply
+    // (below) picks up an intrinsic duration.
+    state.triggers.set_manual(spec, None);
+}
+
+#[tauri::command]
+pub fn clear_manual(state: State<AppState>) {
+    state.triggers.clear_manual();
+}
+
+#[tauri::command]
+pub fn set_brightness(state: State<AppState>, value: u8) {
+    state.engine.set_brightness(value);
+    state.store.set_setting("brightness", &value.to_string());
+}
+
+#[tauri::command]
+pub fn get_brightness(state: State<AppState>) -> u8 {
+    state.engine.brightness.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn list_animations(state: State<AppState>) -> Vec<Animation> {
+    state.store.list_animations()
+}
+
+#[tauri::command]
+pub fn save_animation(
+    state: State<AppState>,
+    name: String,
+    spec: AnimSpec,
+    duration_ms: Option<i64>,
+) -> Result<i64, String> {
+    state
+        .store
+        .save_animation(&name, &spec, false, duration_ms)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_animation(
+    state: State<AppState>,
+    id: i64,
+    name: String,
+    spec: AnimSpec,
+    duration_ms: Option<i64>,
+) -> Result<(), String> {
+    state
+        .store
+        .update_animation(id, &name, &spec, duration_ms)
+        .map_err(|e| e.to_string())?;
+    // The edited animation may be the idle animation or feed an active
+    // overlay next time its trigger fires; recompute picks up the former now.
+    state.triggers.recompute();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_animation(state: State<AppState>, id: i64) -> Result<(), String> {
+    state.store.delete_animation(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn apply_animation(state: State<AppState>, id: i64) -> Result<(), String> {
+    let animation = state.store.animation(id).ok_or("no such animation")?;
+    // An animation with its own length plays out and falls away, revealing
+    // whatever was underneath — Apply on "Success Flash" is a 2s flash, not
+    // a mode you have to release.
+    let expires = animation
+        .duration_ms
+        .map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
+    state.triggers.set_manual(animation.spec, expires);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_idle_animation(state: State<AppState>, id: i64) {
+    state
+        .store
+        .set_setting("idle_animation_id", &id.to_string());
+    state.triggers.recompute();
+}
+
+#[tauri::command]
+pub fn get_idle_animation(state: State<AppState>) -> Option<i64> {
+    state
+        .store
+        .setting("idle_animation_id")
+        .and_then(|v| v.parse().ok())
+}
+
+/// "animation" (default) shows the idle animation; "claude_usage" shows the
+/// live Claude session/weekly gauge fed by the lightctl statusline bridge.
+#[tauri::command]
+pub fn set_idle_mode(state: State<AppState>, mode: String) -> Result<(), String> {
+    if mode != "animation" && mode != "claude_usage" {
+        return Err(format!("unknown idle mode: {mode}"));
+    }
+    state.store.set_setting("idle_mode", &mode);
+    state.triggers.recompute();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_idle_mode(state: State<AppState>) -> String {
+    state
+        .store
+        .setting("idle_mode")
+        .unwrap_or_else(|| "animation".into())
+}
+
+#[tauri::command]
+pub fn list_triggers(state: State<AppState>) -> Vec<Trigger> {
+    state.store.list_triggers()
+}
+
+#[tauri::command]
+pub fn save_trigger(state: State<AppState>, trigger: Trigger) -> Result<i64, String> {
+    let id = state.store.save_trigger(&trigger).map_err(|e| e.to_string())?;
+    // Disabling a trigger must kill its live overlay, not just future fires.
+    state.triggers.sync_with_store();
+    Ok(id)
+}
+
+/// Persist a drag-reorder: `ids` in display order, first = highest priority.
+#[tauri::command]
+pub fn reorder_triggers(state: State<AppState>, ids: Vec<i64>) -> Result<(), String> {
+    state.store.reorder_triggers(&ids).map_err(|e| e.to_string())?;
+    state.triggers.sync_with_store();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_trigger(state: State<AppState>, id: i64) -> Result<(), String> {
+    state.store.delete_trigger(id).map_err(|e| e.to_string())?;
+    state.triggers.sync_with_store();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recent_events(state: State<AppState>, limit: u32) -> Vec<Event> {
+    state.store.recent_events(limit)
+}
+
+#[tauri::command]
+pub fn get_active(state: State<AppState>) -> ActiveState {
+    state.triggers.active_state_snapshot()
+}
+
+#[tauri::command]
+pub fn snooze(state: State<AppState>, minutes: u64) {
+    state.triggers.snooze(minutes);
+}
+
+// -- schedules ---------------------------------------------------------------
+
+#[tauri::command]
+pub fn list_schedules(state: State<AppState>) -> Vec<Schedule> {
+    state.store.list_schedules()
+}
+
+#[tauri::command]
+pub fn save_schedule(state: State<AppState>, schedule: Schedule) -> Result<i64, String> {
+    state
+        .store
+        .save_schedule(&schedule)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_schedule(state: State<AppState>, id: i64) -> Result<(), String> {
+    state.store.delete_schedule(id).map_err(|e| e.to_string())
+}
+
+// -- export / import ----------------------------------------------------------
+// Animations are referenced by *name* in the file, so a config moves between
+// machines whose row ids differ. Import upserts by name — nothing is deleted.
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigFile {
+    version: u32,
+    animations: Vec<ConfigAnimation>,
+    triggers: Vec<ConfigTrigger>,
+    #[serde(default)]
+    schedules: Vec<ConfigSchedule>,
+    idle_animation: Option<String>,
+    #[serde(default)]
+    idle_mode: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigAnimation {
+    name: String,
+    spec: AnimSpec,
+    builtin: bool,
+    duration_ms: Option<i64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigTrigger {
+    name: String,
+    source: String,
+    event_type: String,
+    clear_event_type: Option<String>,
+    animation: String,
+    priority: i32,
+    duration_ms: Option<i64>,
+    enabled: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigSchedule {
+    name: String,
+    time: String,
+    action: String,
+    event_type: Option<String>,
+    animation: Option<String>,
+    enabled: bool,
+}
+
+#[tauri::command]
+pub fn export_config(state: State<AppState>, path: String) -> Result<(), String> {
+    let animations = state.store.list_animations();
+    let name_of = |id: i64| animations.iter().find(|a| a.id == id).map(|a| a.name.clone());
+    let file = ConfigFile {
+        version: 1,
+        animations: animations
+            .iter()
+            .map(|a| ConfigAnimation {
+                name: a.name.clone(),
+                spec: a.spec.clone(),
+                builtin: a.builtin,
+                duration_ms: a.duration_ms,
+            })
+            .collect(),
+        triggers: state
+            .store
+            .list_triggers()
+            .into_iter()
+            .filter_map(|t| {
+                Some(ConfigTrigger {
+                    animation: name_of(t.animation_id)?,
+                    name: t.name,
+                    source: t.source,
+                    event_type: t.event_type,
+                    clear_event_type: t.clear_event_type,
+                    priority: t.priority,
+                    duration_ms: t.duration_ms,
+                    enabled: t.enabled,
+                })
+            })
+            .collect(),
+        schedules: state
+            .store
+            .list_schedules()
+            .into_iter()
+            .map(|s| ConfigSchedule {
+                animation: s.animation_id.and_then(name_of),
+                name: s.name,
+                time: s.time,
+                action: s.action,
+                event_type: s.event_type,
+                enabled: s.enabled,
+            })
+            .collect(),
+        idle_animation: state
+            .store
+            .setting("idle_animation_id")
+            .and_then(|v| v.parse().ok())
+            .and_then(name_of),
+        idle_mode: state.store.setting("idle_mode"),
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_config(state: State<AppState>, path: String) -> Result<String, String> {
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let file: ConfigFile = serde_json::from_str(&raw).map_err(|e| format!("not a Luminode config: {e}"))?;
+
+    for a in &file.animations {
+        state
+            .store
+            .save_animation(&a.name, &a.spec, a.builtin, a.duration_ms)
+            .map_err(|e| e.to_string())?;
+    }
+    let animations = state.store.list_animations();
+    let id_of = |name: &str| animations.iter().find(|a| a.name == name).map(|a| a.id);
+
+    let existing_triggers = state.store.list_triggers();
+    let mut trigger_count = 0;
+    for t in &file.triggers {
+        let Some(animation_id) = id_of(&t.animation) else { continue };
+        let id = existing_triggers
+            .iter()
+            .find(|e| e.name == t.name)
+            .map(|e| e.id)
+            .unwrap_or(0);
+        state
+            .store
+            .save_trigger(&Trigger {
+                id,
+                name: t.name.clone(),
+                source: t.source.clone(),
+                event_type: t.event_type.clone(),
+                clear_event_type: t.clear_event_type.clone(),
+                animation_id,
+                priority: t.priority,
+                duration_ms: t.duration_ms,
+                enabled: t.enabled,
+            })
+            .map_err(|e| e.to_string())?;
+        trigger_count += 1;
+    }
+
+    let existing_schedules = state.store.list_schedules();
+    for s in &file.schedules {
+        let id = existing_schedules
+            .iter()
+            .find(|e| e.name == s.name)
+            .map(|e| e.id)
+            .unwrap_or(0);
+        state
+            .store
+            .save_schedule(&Schedule {
+                id,
+                name: s.name.clone(),
+                time: s.time.clone(),
+                action: s.action.clone(),
+                event_type: s.event_type.clone(),
+                animation_id: s.animation.as_deref().and_then(id_of),
+                enabled: s.enabled,
+            })
+            .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(idle_id) = file.idle_animation.as_deref().and_then(id_of) {
+        state
+            .store
+            .set_setting("idle_animation_id", &idle_id.to_string());
+    }
+    if let Some(mode) = file
+        .idle_mode
+        .as_deref()
+        .filter(|m| *m == "animation" || *m == "claude_usage")
+    {
+        state.store.set_setting("idle_mode", mode);
+    }
+    state.triggers.sync_with_store();
+    Ok(format!(
+        "Imported {} animations, {} triggers, {} schedules",
+        file.animations.len(),
+        trigger_count,
+        file.schedules.len()
+    ))
+}
+
+/// Store (or, with an empty value, delete) an integration secret in the OS
+/// keychain. Known names: "slack_token", "calendar_ics_url".
+#[tauri::command]
+pub fn set_secret(name: String, value: String) -> Result<(), String> {
+    crate::secrets::set(&name, &value)
+}
+
+#[tauri::command]
+pub fn has_secret(name: String) -> bool {
+    crate::secrets::get(&name).is_some()
+}
+
+/// Inject a synthetic event — lets users test triggers from the UI without
+/// wiring up a real integration first.
+#[tauri::command]
+pub fn simulate_event(
+    state: State<AppState>,
+    source: String,
+    event_type: String,
+    payload: serde_json::Value,
+) {
+    let _ = state.bus.send(Event::new(&source, &event_type, payload));
+}

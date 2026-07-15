@@ -1,0 +1,13 @@
+# Rust
+/target/
+
+# Node / SvelteKit
+node_modules/
+app/build/
+app/.svelte-kit/
+
+# Tauri generated schemas
+app/src-tauri/gen/
+
+# OS
+.DS_Store
