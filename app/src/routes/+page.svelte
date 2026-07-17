@@ -387,6 +387,15 @@
     }
   }
 
+  async function replayEvent(event: BusEvent) {
+    try {
+      await invoke("simulate_event", { source: event.source, eventType: event.type, payload: event.payload });
+      notify(`Replayed ${event.source}/${event.type}`);
+    } catch (e) {
+      reportError(e);
+    }
+  }
+
   function pixels(hex: string): string[] {
     const out: string[] = [];
     for (let i = 0; i < NUM_LEDS; i++) out.push(`#${hex.slice(i * 6, i * 6 + 6)}`);
@@ -811,6 +820,7 @@
           <li>
             <small class="dim">{fmtTime(ev.ts)}</small>
             <span class="grow"><strong>{ev.source}</strong>/{ev.type} <small class="dim">{fmtPayload(ev.payload)}</small></span>
+            <button class="subtle" aria-label={`Replay ${ev.source}/${ev.type}`} onclick={() => replayEvent(ev)}>Replay</button>
           </li>
         {/each}
       </ul>

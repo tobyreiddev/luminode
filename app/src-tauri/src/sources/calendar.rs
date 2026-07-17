@@ -11,10 +11,9 @@
 //! Deliberately skipped, per the plan's false-positive traps: all-day
 //! events, TRANSP:TRANSPARENT ("free") events, STATUS:CANCELLED.
 //!
-//! **Known limitation:** recurring events (RRULE) are not expanded — ICS
-//! feeds ship the recurrence rule, not instances, and expanding RFC 5545
-//! recurrences correctly is a project of its own. Recurring meetings are
-//! ignored (README documents the workaround and the implementation path).
+//! Common daily and weekly recurring events are expanded in a bounded rolling
+//! window. Complex BYDAY/RDATE rules fail closed until a full RFC 5545 engine
+//! is introduced.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use std::collections::HashSet;
@@ -141,10 +140,11 @@ struct CalEventDraft {
     summary: String,
     uid: String,
     skip: bool,
+    rrule: Option<String>,
 }
 
 /// Minimal RFC 5545 parse: unfold continuation lines, walk VEVENT blocks,
-/// keep timed, opaque, non-cancelled, non-recurring events.
+/// keep timed, opaque, non-cancelled events and common recurrences.
 fn parse_ics(body: &str) -> Vec<CalEvent> {
     // Unfold: a line starting with space/tab continues the previous line.
     let mut lines: Vec<String> = Vec::new();
@@ -167,12 +167,17 @@ fn parse_ics(body: &str) -> Vec<CalEvent> {
             "END:VEVENT" => {
                 if let Some(draft) = cur.take() {
                     if let (Some(start), Some(end), false) = (draft.start, draft.end, draft.skip) {
-                        events.push(CalEvent {
+                        let event = CalEvent {
                             uid: draft.uid,
                             summary: draft.summary,
                             start,
                             end,
-                        });
+                        };
+                        if let Some(rule) = draft.rrule {
+                            events.extend(expand_recurrence(event, &rule));
+                        } else {
+                            events.push(event);
+                        }
                     }
                 }
             }
@@ -190,13 +195,59 @@ fn parse_ics(body: &str) -> Vec<CalEvent> {
                     // The false-positive traps + unexpandable recurrences.
                     "TRANSP" if value == "TRANSPARENT" => state.skip = true,
                     "STATUS" if value == "CANCELLED" => state.skip = true,
-                    "RRULE" | "RDATE" => state.skip = true,
+                    "RRULE" => state.rrule = Some(value.to_string()),
+                    "RDATE" => state.skip = true,
                     _ => {}
                 }
             }
         }
     }
     events
+}
+
+fn expand_recurrence(event: CalEvent, rule: &str) -> Vec<CalEvent> {
+    let fields: std::collections::HashMap<&str, &str> = rule
+        .split(';')
+        .filter_map(|part| part.split_once('='))
+        .collect();
+    let days = match fields.get("FREQ").copied() {
+        Some("DAILY") => 1,
+        Some("WEEKLY") if !fields.contains_key("BYDAY") => 7,
+        _ => return Vec::new(),
+    };
+    let interval = fields
+        .get("INTERVAL")
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| (1..=365).contains(v))
+        .unwrap_or(1);
+    let count = fields
+        .get("COUNT")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(5_000)
+        .min(5_000);
+    let until = fields.get("UNTIL").and_then(|v| parse_dt("UNTIL", v));
+    let now = Utc::now();
+    let window_start = now - chrono::Duration::days(1);
+    let window_end = now + chrono::Duration::days(90);
+    let duration = event.end - event.start;
+    let step = chrono::Duration::days(days * interval);
+    let mut start = event.start;
+    let mut out = Vec::new();
+    for _ in 0..count {
+        if until.is_some_and(|limit| start > limit) || start > window_end {
+            break;
+        }
+        if start + duration >= window_start {
+            out.push(CalEvent {
+                uid: format!("{}@{}", event.uid, start.timestamp()),
+                summary: event.summary.clone(),
+                start,
+                end: start + duration,
+            });
+        }
+        start += step;
+    }
+    out
 }
 
 /// `20260712T160000Z` → UTC; `20260712T170000` (incl. TZID=…) → the Mac's
@@ -231,11 +282,20 @@ mod tests {
     }
 
     #[test]
-    fn skips_cancelled_free_all_day_and_recurring_events() {
-        for extra in ["STATUS:CANCELLED", "TRANSP:TRANSPARENT", "RRULE:FREQ=DAILY"] {
+    fn skips_cancelled_free_and_all_day_events() {
+        for extra in ["STATUS:CANCELLED", "TRANSP:TRANSPARENT"] {
             let body = format!("BEGIN:VEVENT\nUID:1\nDTSTART:20260717T010000Z\nDTEND:20260717T020000Z\n{extra}\nEND:VEVENT");
             assert!(parse_ics(&body).is_empty());
         }
         assert!(parse_ics("BEGIN:VEVENT\nUID:1\nDTSTART;VALUE=DATE:20260717\nDTEND;VALUE=DATE:20260718\nEND:VEVENT").is_empty());
+    }
+
+    #[test]
+    fn expands_bounded_daily_recurrence() {
+        let start = (Utc::now() - chrono::Duration::days(2)).format("%Y%m%dT%H%M%SZ");
+        let end = (Utc::now() - chrono::Duration::days(2) + chrono::Duration::hours(1))
+            .format("%Y%m%dT%H%M%SZ");
+        let body = format!("BEGIN:VEVENT\nUID:daily\nDTSTART:{start}\nDTEND:{end}\nRRULE:FREQ=DAILY;COUNT=10\nEND:VEVENT");
+        assert!(!parse_ics(&body).is_empty());
     }
 }
