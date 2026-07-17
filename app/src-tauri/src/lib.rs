@@ -66,8 +66,13 @@ pub fn run() {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(64u8);
 
+            let tray_animation = store
+                .setting("tray_animation")
+                .map(|v| v == "true")
+                .unwrap_or(true);
+
             let bus = events::new_bus();
-            let engine = Arc::new(EngineShared::new(initial_brightness));
+            let engine = Arc::new(EngineShared::new(initial_brightness, tray_animation));
             let device_status = Arc::new(Mutex::new(DeviceStatus::default()));
             let candidates = Arc::new(Mutex::new(Vec::new()));
             let health = health::HealthRegistry::default();
@@ -142,6 +147,8 @@ pub fn run() {
                 });
             }
 
+            let tray_engine = engine.clone();
+            let tray_store = store.clone();
             app.manage(AppState {
                 store,
                 bus,
@@ -153,7 +160,7 @@ pub fn run() {
                 health,
             });
 
-            setup_tray(app, trigger_engine)?;
+            setup_tray(app, trigger_engine, tray_engine, tray_store)?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -229,10 +236,23 @@ pub fn run() {
         });
 }
 
-fn setup_tray(app: &tauri::App, triggers: Arc<TriggerEngine>) -> tauri::Result<()> {
+fn setup_tray(
+    app: &tauri::App,
+    triggers: Arc<TriggerEngine>,
+    engine: Arc<EngineShared>,
+    store: Store,
+) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Luminode", true, None::<&str>)?;
     let snooze30 = MenuItem::with_id(app, "snooze30", "Snooze 30 min", true, None::<&str>)?;
     let snooze_off = MenuItem::with_id(app, "snooze_off", "End snooze", true, None::<&str>)?;
+    let tray_anim = CheckMenuItem::with_id(
+        app,
+        "tray_anim",
+        "Show animation in menu bar",
+        true,
+        engine.tray_preview.load(std::sync::atomic::Ordering::Relaxed),
+        None::<&str>,
+    )?;
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
@@ -250,6 +270,7 @@ fn setup_tray(app: &tauri::App, triggers: Arc<TriggerEngine>) -> tauri::Result<(
             &snooze30,
             &snooze_off,
             &PredefinedMenuItem::separator(app)?,
+            &tray_anim,
             &autostart,
             &quit,
         ],
@@ -268,6 +289,16 @@ fn setup_tray(app: &tauri::App, triggers: Arc<TriggerEngine>) -> tauri::Result<(
             }
             "snooze30" => triggers.snooze(30),
             "snooze_off" => triggers.snooze(0),
+            "tray_anim" => {
+                // Flip, persist, and reflect; the engine loop repaints (or
+                // restores the default icon) on its next tick.
+                let on = !engine.tray_preview.load(std::sync::atomic::Ordering::Relaxed);
+                engine
+                    .tray_preview
+                    .store(on, std::sync::atomic::Ordering::Relaxed);
+                store.set_setting("tray_animation", if on { "true" } else { "false" });
+                let _ = tray_anim.set_checked(on);
+            }
             "autostart" => {
                 // Toggle, then reflect the *actual* state back onto the
                 // menu item (enable/disable can fail, e.g. dev builds).

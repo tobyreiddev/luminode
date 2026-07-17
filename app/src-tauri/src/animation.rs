@@ -166,10 +166,13 @@ pub struct EngineShared {
     /// effect names with an `err` event instead of us streaming at it.
     pub device_proto: AtomicU8,
     pub preview_visible: AtomicBool,
+    /// Mirror the animation onto the tray icon (menu-bar strip preview).
+    /// Toggled from the tray menu, persisted as the `tray_animation` setting.
+    pub tray_preview: AtomicBool,
 }
 
 impl EngineShared {
-    pub fn new(initial_brightness: u8) -> Self {
+    pub fn new(initial_brightness: u8, tray_preview: bool) -> Self {
         Self {
             spec: Mutex::new((AnimSpec::default(), 1)),
             brightness: AtomicU8::new(initial_brightness),
@@ -177,6 +180,7 @@ impl EngineShared {
             connection_epoch: AtomicU64::new(0),
             device_proto: AtomicU8::new(2),
             preview_visible: AtomicBool::new(true),
+            tray_preview: AtomicBool::new(tray_preview),
         }
     }
 
@@ -247,6 +251,8 @@ fn run(
     // Send-on-change state for the streamed (non-native) path.
     let mut last_sent_frame: Option<String> = None;
     let mut last_frame_sent_at = Instant::now();
+    // RGBA currently painted on the tray icon; None = the default app icon.
+    let mut tray_rgba_shown: Option<Vec<u8>> = None;
 
     loop {
         let tick_started = Instant::now();
@@ -296,8 +302,14 @@ fn run(
         last_frame = frame.clone();
 
         // Preview for the UI at ~10fps (every 3rd tick) to keep IPC cheap.
-        if tick_count.is_multiple_of(3) && shared.preview_visible.load(Ordering::Relaxed) {
-            let _ = app.emit("engine:frame", frame_to_hex(&frame));
+        // The tray mirror shares the cadence but not the preview_visible
+        // gate — the menu bar is exactly the place that should keep
+        // animating while the window is hidden.
+        if tick_count.is_multiple_of(3) {
+            if shared.preview_visible.load(Ordering::Relaxed) {
+                let _ = app.emit("engine:frame", frame_to_hex(&frame));
+            }
+            update_tray(&app, &shared, &frame, &mut tray_rgba_shown);
         }
 
         if epoch != last_sent_epoch {
@@ -359,6 +371,73 @@ fn run(
         if elapsed < TICK {
             std::thread::sleep(TICK - elapsed);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tray icon mirror
+// ---------------------------------------------------------------------------
+// The strip drawn as a horizontal bar in the menu bar: 2px per LED inside a
+// 1-2px dark frame, on a transparent canvas. macOS scales tray images to a
+// fixed height preserving aspect ratio, so the canvas height (not the bar
+// height) controls how wide the icon renders — 70×36 shows as ~35pt wide.
+
+const TRAY_W: usize = NUM_LEDS * 2 + 4;
+const TRAY_H: usize = 36;
+const TRAY_BAR_H: usize = 10;
+
+fn tray_rgba(frame: &[[u8; 3]]) -> Vec<u8> {
+    let mut buf = vec![0u8; TRAY_W * TRAY_H * 4];
+    let bar_top = (TRAY_H - TRAY_BAR_H) / 2;
+    let border = [58u8, 58, 64, 200];
+    for y in (bar_top - 1)..(bar_top + TRAY_BAR_H + 1) {
+        for x in 0..TRAY_W {
+            let in_bar = y >= bar_top && y < bar_top + TRAY_BAR_H && (2..TRAY_W - 2).contains(&x);
+            let px = if in_bar {
+                let c = frame[(x - 2) / 2];
+                [c[0], c[1], c[2], 255]
+            } else {
+                border
+            };
+            let o = (y * TRAY_W + x) * 4;
+            buf[o..o + 4].copy_from_slice(&px);
+        }
+    }
+    buf
+}
+
+/// Push the current frame onto the tray icon when it changed. An all-black
+/// frame (effect off / snoozed) and a disabled toggle both fall back to the
+/// default app icon — a black bar in the menu bar reads as a glitch.
+fn update_tray(
+    app: &tauri::AppHandle,
+    shared: &EngineShared,
+    frame: &[[u8; 3]],
+    shown: &mut Option<Vec<u8>>,
+) {
+    let desired = if shared.tray_preview.load(Ordering::Relaxed)
+        && frame.iter().any(|px| *px != [0, 0, 0])
+    {
+        Some(tray_rgba(frame))
+    } else {
+        None
+    };
+    // The tray may not be built yet during startup — leave `shown` untouched
+    // so the next tick retries instead of believing the icon was painted.
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    if desired != *shown {
+        let icon = match &desired {
+            Some(rgba) => Some(tauri::image::Image::new_owned(
+                rgba.clone(),
+                TRAY_W as u32,
+                TRAY_H as u32,
+            )),
+            None => app.default_window_icon().cloned(),
+        };
+        let _ = tray.set_icon(icon);
+        *shown = desired;
     }
 }
 
