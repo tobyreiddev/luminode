@@ -21,6 +21,20 @@
   // "keyframes" needs its stop editor, so it's only offered where one exists.
   const EDITOR_EFFECTS = [...EFFECTS, "keyframes"];
   const TWO_COLOR_EFFECTS = new Set(["flash", "gradient", "progress", "dual_progress"]);
+  type View = "home" | "automations" | "integrations";
+  let view = $state<View>("home");
+  let toast = $state<{ message: string; kind: "ok" | "error" } | null>(null);
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function notify(message: string, kind: "ok" | "error" = "ok") {
+    toast = { message, kind };
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toast = null), 4000);
+  }
+
+  function reportError(error: unknown) {
+    notify(String(error), "error");
+  }
 
   // --- live state pushed from Rust ---
   let status = $state<DeviceStatus>({ connected: false, port: null, serialNumber: null, fwVersion: null, ledCount: null });
@@ -75,7 +89,7 @@
     try {
       await invoke("set_secret", { name, value: value.trim() });
     } catch (e) {
-      alert(String(e));
+      reportError(e);
       return;
     }
     if (name === "slack_token") {
@@ -85,6 +99,7 @@
       calendarSet = await invoke("has_secret", { name });
       calendarInput = "";
     }
+    notify(value.trim() ? "Integration secret saved" : "Integration disconnected");
   }
 
   function manualSpec(): AnimSpec {
@@ -187,7 +202,10 @@
     await invoke("apply_animation", { id });
   }
   async function deleteAnimation(id: number) {
-    await invoke("delete_animation", { id });
+    const animation = animations.find((a) => a.id === id);
+    const affected = triggers.filter((t) => t.animationId === id).length;
+    if (!confirm(`Delete “${animation?.name ?? "animation"}”?${affected ? ` This also removes ${affected} trigger(s).` : ""}`)) return;
+    try { await invoke("delete_animation", { id }); } catch (e) { reportError(e); return; }
     animations = await invoke("list_animations");
     triggers = await invoke("list_triggers");
   }
@@ -239,6 +257,7 @@
     triggers = await invoke("list_triggers");
   }
   async function deleteTrigger(id: number) {
+    if (!confirm("Delete this trigger?")) return;
     await invoke("delete_trigger", { id });
     triggers = await invoke("list_triggers");
   }
@@ -299,6 +318,7 @@
     schedules = await invoke("list_schedules");
   }
   async function deleteSchedule(id: number) {
+    if (!confirm("Delete this schedule?")) return;
     await invoke("delete_schedule", { id });
     schedules = await invoke("list_schedules");
   }
@@ -313,7 +333,7 @@
     try {
       await invoke("export_config", { path });
     } catch (e) {
-      alert(String(e));
+      reportError(e);
     }
   }
   async function importConfig() {
@@ -324,9 +344,9 @@
     if (typeof path !== "string") return;
     try {
       const summary: string = await invoke("import_config", { path });
-      alert(summary);
+      notify(summary);
     } catch (e) {
-      alert(String(e));
+      reportError(e);
       return;
     }
     animations = await invoke("list_animations");
@@ -353,6 +373,18 @@
       }
     }
     await invoke("simulate_event", { source: simSource, eventType: simType, payload });
+    notify("Event fired");
+  }
+
+  async function clearHistory() {
+    if (!confirm("Clear the complete event history?")) return;
+    try {
+      await invoke("clear_events");
+      events = [];
+      notify("Event history cleared");
+    } catch (e) {
+      reportError(e);
+    }
   }
 
   function pixels(hex: string): string[] {
@@ -386,6 +418,7 @@
       }),
     ];
     (async () => {
+      try {
       status = await invoke("get_status");
       candidates = await invoke("list_candidates");
       animations = await invoke("list_animations");
@@ -397,6 +430,9 @@
       active = await invoke("get_active");
       slackSet = await invoke("has_secret", { name: "slack_token" });
       calendarSet = await invoke("has_secret", { name: "calendar_ics_url" });
+      } catch (e) {
+        reportError(`Could not load Luminode: ${e}`);
+      }
     })();
     return () => {
       unlisteners.forEach((p) => p.then((un) => un()));
@@ -404,7 +440,7 @@
   });
 </script>
 
-<main>
+<main data-view={view}>
   <!-- ======= header: preview strip + status ======= -->
   <header>
     <div class="strip" title="Live preview of the LED strip">
@@ -435,10 +471,21 @@
       </div>
     {/if}
   </header>
+  <nav class="tabs" aria-label="Main sections">
+    <button class:active={view === "home"} aria-current={view === "home" ? "page" : undefined} onclick={() => (view = "home")}>Home</button>
+    <button class:active={view === "automations"} aria-current={view === "automations" ? "page" : undefined} onclick={() => (view = "automations")}>Automations</button>
+    <button class:active={view === "integrations"} aria-current={view === "integrations" ? "page" : undefined} onclick={() => (view = "integrations")}>Integrations & history</button>
+  </nav>
+  {#if !status.connected && candidates.length === 0}
+    <aside class="onboarding">
+      <strong>Connect your Luminode</strong>
+      <span>Plug in the Arduino over USB. The app will discover it automatically, then you can test brightness and choose an idle animation.</span>
+    </aside>
+  {/if}
 
   <div class="columns">
     <!-- ======= manual control + animations ======= -->
-    <section>
+    <section class="home-view">
       <h2>Manual control {#if manualActive}<button class="subtle" onclick={releaseManual}>release</button>{/if}</h2>
       <div class="field">
         <label for="effect">Effect</label>
@@ -565,7 +612,7 @@
     </section>
 
     <!-- ======= triggers ======= -->
-    <section>
+    <section class="automations-view">
       <h2>Triggers <button class="subtle" onclick={() => (editingTrigger = newTrigger())}>+ add</button></h2>
       <small class="hint">Drag to reorder — higher wins when several fire at once.</small>
       <ul class="list">
@@ -730,7 +777,7 @@
     </section>
 
     <!-- ======= events ======= -->
-    <section>
+    <section class="integrations-view">
       <h2>Integrations</h2>
       <div class="field">
         <label for="slacktok">Slack {slackSet ? "✓" : ""}</label>
@@ -758,7 +805,7 @@
         <button onclick={simulate}>Fire</button>
       </div>
 
-      <h2>Event log</h2>
+      <h2>Event log <button class="subtle" onclick={clearHistory} disabled={events.length === 0}>Clear history</button></h2>
       <ul class="list log">
         {#each events as ev}
           <li>
@@ -770,16 +817,26 @@
     </section>
   </div>
 </main>
+{#if toast}
+  <div class="toast {toast.kind}" role={toast.kind === "error" ? "alert" : "status"}>{toast.message}</div>
+{/if}
 
 <style>
   :global(body) {
+    --bg: #111318;
+    --surface: #1a1d24;
+    --surface-raised: #232732;
+    --border: #39404d;
+    --text: #f0f2f5;
+    --muted: #aeb5c1;
+    --accent: #4a7cf0;
     margin: 0;
     font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
-    background: #14161a;
-    color: #e6e8ec;
+    background: var(--bg);
+    color: var(--text);
     font-size: 14px;
   }
-  main { padding: 16px 20px; }
+  main { padding: 20px 24px 32px; max-width: 1280px; margin: 0 auto; }
   header { margin-bottom: 14px; }
 
   .strip {
@@ -799,6 +856,17 @@
   }
 
   .statusbar { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 4px; margin: 0 0 18px; border-bottom: 1px solid var(--border); }
+  .tabs button { border: 0; border-radius: 7px 7px 0 0; padding: 10px 14px; background: transparent; color: var(--muted); }
+  .tabs button.active { color: var(--text); background: var(--surface); box-shadow: inset 0 -2px var(--accent); }
+  main[data-view="home"] section:not(.home-view),
+  main[data-view="automations"] section:not(.automations-view),
+  main[data-view="integrations"] section:not(.integrations-view) { display: none; }
+  main[data-view="home"] .columns,
+  main[data-view="automations"] .columns,
+  main[data-view="integrations"] .columns { grid-template-columns: minmax(0, 760px); justify-content: center; }
+  .onboarding { display: flex; gap: 6px; flex-direction: column; padding: 14px 16px; margin-bottom: 18px; border: 1px solid #655126; background: #2a2417; border-radius: 10px; }
+  .onboarding span { color: #d7c99e; }
   .pill {
     padding: 3px 10px;
     border-radius: 99px;
@@ -825,7 +893,8 @@
     color: #e6e8ec;
     border: 1px solid #333842;
     border-radius: 6px;
-    padding: 5px 9px;
+    padding: 8px 10px;
+    min-height: 36px;
     font-size: 13px;
     font-family: inherit;
   }
@@ -833,6 +902,10 @@
   input[type="color"] { padding: 1px; width: 40px; height: 28px; }
   button { cursor: pointer; }
   button:hover { border-color: #5b6472; }
+  button:focus-visible, input:focus-visible, select:focus-visible, [draggable="true"]:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--accent) 65%, white);
+    outline-offset: 2px;
+  }
   button.primary { background: #1f4fd8; border-color: #1f4fd8; }
   button.subtle { background: transparent; border-color: transparent; color: #9aa1ad; }
   button.subtle:hover { color: #e6e8ec; }
@@ -852,7 +925,9 @@
   .swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
   .log { max-height: 320px; overflow-y: auto; }
   .dim { color: #6f7683; }
-  small { color: #9aa1ad; }
+  small { color: var(--muted); }
+  .toast { position: fixed; right: 20px; bottom: 20px; max-width: 420px; padding: 12px 16px; border-radius: 9px; background: #17472a; color: #aaf0c0; box-shadow: 0 8px 32px #0008; z-index: 100; }
+  .toast.error { background: #541f25; color: #ffc2c6; }
 
   .editor {
     background: #1a1d22;
@@ -898,4 +973,16 @@
   }
   .switch input:checked + .slider { background: #1f4fd8; }
   .switch input:checked + .slider::before { transform: translateX(13px); background: #fff; }
+  @media (max-width: 640px) {
+    main { padding: 14px; }
+    .tabs { overflow-x: auto; }
+    .tabs button { white-space: nowrap; }
+    .field { align-items: stretch; }
+    .field label { width: 100%; }
+    input, select, button { min-height: 42px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.001ms !important; animation-duration: 0.001ms !important; }
+    .led { box-shadow: none !important; }
+  }
 </style>
