@@ -275,6 +275,11 @@ pub fn recent_events(state: State<AppState>, limit: u32) -> Vec<Event> {
 }
 
 #[tauri::command]
+pub fn clear_events(state: State<AppState>) -> Result<(), String> {
+    state.store.clear_events().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn get_active(state: State<AppState>) -> ActiveState {
     state.triggers.active_state_snapshot()
 }

@@ -84,6 +84,8 @@ impl Store {
         add_column_if_missing(&conn, "animations", "duration_ms", "INTEGER");
         conn.execute_batch(
             "
+            PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 5000;
             PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
@@ -110,7 +112,7 @@ impl Store {
                 time         TEXT NOT NULL,            -- 'HH:MM' local, daily
                 action       TEXT NOT NULL,            -- 'emit' | 'idle'
                 event_type   TEXT,                     -- for 'emit'
-                animation_id INTEGER,                  -- for 'idle'
+                animation_id INTEGER REFERENCES animations(id) ON DELETE SET NULL,
                 enabled      INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS triggers (
@@ -119,7 +121,7 @@ impl Store {
                 source           TEXT NOT NULL,
                 event_type       TEXT NOT NULL,
                 clear_event_type TEXT,
-                animation_id     INTEGER NOT NULL REFERENCES animations(id),
+                animation_id     INTEGER NOT NULL REFERENCES animations(id) ON DELETE CASCADE,
                 priority         INTEGER NOT NULL DEFAULT 10,
                 duration_ms      INTEGER,
                 enabled          INTEGER NOT NULL DEFAULT 1
@@ -132,6 +134,13 @@ impl Store {
                 payload    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_event_log_ts ON event_log(ts_ms);
+            CREATE TRIGGER IF NOT EXISTS prune_event_log
+            AFTER INSERT ON event_log
+            WHEN NEW.id % 100 = 0
+            BEGIN
+                DELETE FROM event_log
+                WHERE id <= (SELECT MAX(id) FROM event_log) - 5000;
+            END;
             ",
         )?;
         let store = Self(Arc::new(Mutex::new(conn)));
@@ -580,7 +589,22 @@ impl Store {
     }
 
     pub fn animation(&self, id: i64) -> Option<Animation> {
-        self.list_animations().into_iter().find(|a| a.id == id)
+        let conn = self.0.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, spec, builtin, duration_ms FROM animations WHERE id = ?1",
+            params![id],
+            |row| {
+                let spec_json: String = row.get(2)?;
+                Ok(Animation {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    spec: serde_json::from_str(&spec_json).unwrap_or_else(|_| AnimSpec::off()),
+                    builtin: row.get::<_, i64>(3)? != 0,
+                    duration_ms: row.get(4)?,
+                })
+            },
+        )
+        .ok()
     }
 
     pub fn save_animation(
@@ -627,16 +651,14 @@ impl Store {
     }
 
     pub fn delete_animation(&self, id: i64) -> rusqlite::Result<()> {
-        let conn = self.0.lock().unwrap();
-        // Triggers referencing the animation go with it — a dangling trigger
-        // would silently do nothing, which is worse than disappearing
-        // visibly.
-        conn.execute("DELETE FROM triggers WHERE animation_id = ?1", params![id])?;
-        conn.execute(
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM triggers WHERE animation_id = ?1", params![id])?;
+        tx.execute(
             "DELETE FROM animations WHERE id = ?1 AND builtin = 0",
             params![id],
         )?;
-        Ok(())
+        tx.commit()
     }
 
     // -- triggers ---------------------------------------------------------------
@@ -805,11 +827,14 @@ impl Store {
             "INSERT INTO event_log(ts_ms, source, event_type, payload) VALUES (?1, ?2, ?3, ?4)",
             params![ev.ts, ev.source, ev.event_type, ev.payload.to_string()],
         );
-        // Keep the log bounded; 5000 rows is weeks of typical traffic.
-        let _ = conn.execute(
-            "DELETE FROM event_log WHERE id <= (SELECT MAX(id) FROM event_log) - 5000",
-            [],
-        );
+    }
+
+    pub fn clear_events(&self) -> rusqlite::Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM event_log", [])?;
+        Ok(())
     }
 
     pub fn recent_events(&self, limit: u32) -> Vec<Event> {

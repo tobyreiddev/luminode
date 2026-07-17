@@ -186,6 +186,7 @@ pub fn run() {
             commands::export_config,
             commands::import_config,
             commands::recent_events,
+            commands::clear_events,
             commands::get_active,
             commands::snooze,
             commands::simulate_event,
