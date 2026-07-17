@@ -9,8 +9,16 @@
 use keyring::Entry;
 
 const SERVICE: &str = "com.luminode.app";
+const ALLOWED_NAMES: &[&str] = &["slack_token", "calendar_ics_url"];
+
+fn allowed(name: &str) -> bool {
+    ALLOWED_NAMES.contains(&name)
+}
 
 pub fn get(name: &str) -> Option<String> {
+    if !allowed(name) {
+        return None;
+    }
     Entry::new(SERVICE, name)
         .ok()?
         .get_password()
@@ -20,6 +28,9 @@ pub fn get(name: &str) -> Option<String> {
 
 /// Empty value deletes the entry.
 pub fn set(name: &str, value: &str) -> Result<(), String> {
+    if !allowed(name) {
+        return Err("unknown secret name".into());
+    }
     let entry = Entry::new(SERVICE, name).map_err(|e| e.to_string())?;
     if value.is_empty() {
         let _ = entry.delete_credential();

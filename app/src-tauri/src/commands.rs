@@ -418,14 +418,70 @@ pub fn export_config(state: State<AppState>, path: String) -> Result<(), String>
 
 #[tauri::command]
 pub fn import_config(state: State<AppState>, path: String) -> Result<String, String> {
+    const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
+    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_CONFIG_BYTES {
+        return Err("config file is larger than 2 MiB".into());
+    }
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let file: ConfigFile =
         serde_json::from_str(&raw).map_err(|e| format!("not a Luminode config: {e}"))?;
+    if file.version != 1 {
+        return Err(format!("unsupported config version: {}", file.version));
+    }
+    if file.animations.len() > 500 || file.triggers.len() > 1_000 || file.schedules.len() > 500 {
+        return Err("config contains too many items".into());
+    }
+    for a in &file.animations {
+        validate_animation_input(&a.name, &a.spec, a.duration_ms)?;
+    }
+    let animation_names: std::collections::HashSet<&str> =
+        file.animations.iter().map(|a| a.name.as_str()).collect();
+    for t in &file.triggers {
+        validate_text(&t.name, "trigger name", MAX_NAME_LEN)?;
+        validate_text(&t.source, "event source", MAX_EVENT_LEN)?;
+        validate_text(&t.event_type, "event type", MAX_EVENT_LEN)?;
+        if let Some(clear) = t.clear_event_type.as_deref() {
+            validate_text(clear, "clear event type", MAX_EVENT_LEN)?;
+        }
+        validate_duration(t.duration_ms, "trigger duration")?;
+        if !animation_names.contains(t.animation.as_str())
+            && state
+                .store
+                .list_animations()
+                .iter()
+                .all(|a| a.name != t.animation)
+        {
+            return Err(format!(
+                "trigger '{}' references an unknown animation",
+                t.name
+            ));
+        }
+    }
+    for s in &file.schedules {
+        validate_text(&s.name, "schedule name", MAX_NAME_LEN)?;
+        let valid_time = s.time.len() == 5
+            && s.time.as_bytes()[2] == b':'
+            && s.time[0..2].parse::<u8>().is_ok_and(|h| h < 24)
+            && s.time[3..5].parse::<u8>().is_ok_and(|m| m < 60);
+        if !valid_time {
+            return Err(format!("schedule '{}' has an invalid time", s.name));
+        }
+        match s.action.as_str() {
+            "emit" => validate_text(
+                s.event_type.as_deref().unwrap_or(""),
+                "schedule event type",
+                MAX_EVENT_LEN,
+            )?,
+            "idle" if s.animation.is_some() => {}
+            "idle" => return Err(format!("schedule '{}' needs an animation", s.name)),
+            _ => return Err(format!("schedule '{}' has an invalid action", s.name)),
+        }
+    }
 
     for a in &file.animations {
         state
             .store
-            .save_animation(&a.name, &a.spec, a.builtin, a.duration_ms)
+            .save_animation(&a.name, &a.spec, false, a.duration_ms)
             .map_err(|e| e.to_string())?;
     }
     let animations = state.store.list_animations();

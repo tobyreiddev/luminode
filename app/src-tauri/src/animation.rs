@@ -294,7 +294,7 @@ fn run(
         last_frame = frame.clone();
 
         // Preview for the UI at ~10fps (every 3rd tick) to keep IPC cheap.
-        if tick_count % 3 == 0 {
+        if tick_count.is_multiple_of(3) {
             let _ = app.emit("engine:frame", frame_to_hex(&frame));
         }
 

@@ -24,10 +24,16 @@ use crate::events::{Bus, Event};
 use crate::secrets;
 
 const SOON_MINUTES: i64 = 5;
+const MAX_ICS_BYTES: usize = 5 * 1024 * 1024;
 
 pub fn spawn(bus: Bus) {
     tauri::async_runtime::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::limited(3))
+            .build()
+            .expect("calendar HTTP client configuration is valid");
         let mut current: Option<String> = None; // uid of the meeting we're in
         let mut announced: HashSet<String> = HashSet::new(); // "soon" already fired
         let mut interval = tokio::time::interval(Duration::from_secs(120));
@@ -94,7 +100,31 @@ pub fn spawn(bus: Bus) {
 }
 
 async fn fetch(client: &reqwest::Client, url: &str) -> Option<String> {
-    client.get(url).send().await.ok()?.text().await.ok()
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if parsed.scheme() != "https" {
+        return None;
+    }
+    let mut response = client
+        .get(parsed)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_ICS_BYTES as u64)
+    {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > MAX_ICS_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).ok()
 }
 
 struct CalEvent {
@@ -102,6 +132,15 @@ struct CalEvent {
     summary: String,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
+}
+
+#[derive(Default)]
+struct CalEventDraft {
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+    summary: String,
+    uid: String,
+    skip: bool,
 }
 
 /// Minimal RFC 5545 parse: unfold continuation lines, walk VEVENT blocks,
@@ -121,24 +160,20 @@ fn parse_ics(body: &str) -> Vec<CalEvent> {
     }
 
     let mut events = Vec::new();
-    let mut cur: Option<(
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-        String,
-        String,
-        bool,
-    )> = None; // (start, end, summary, uid, skip)
+    let mut cur: Option<CalEventDraft> = None;
     for line in &lines {
         match line.as_str() {
-            "BEGIN:VEVENT" => cur = Some((None, None, String::new(), String::new(), false)),
+            "BEGIN:VEVENT" => cur = Some(CalEventDraft::default()),
             "END:VEVENT" => {
-                if let Some((Some(start), Some(end), summary, uid, false)) = cur.take() {
-                    events.push(CalEvent {
-                        uid,
-                        summary,
-                        start,
-                        end,
-                    });
+                if let Some(draft) = cur.take() {
+                    if let (Some(start), Some(end), false) = (draft.start, draft.end, draft.skip) {
+                        events.push(CalEvent {
+                            uid: draft.uid,
+                            summary: draft.summary,
+                            start,
+                            end,
+                        });
+                    }
                 }
             }
             _ => {
@@ -148,14 +183,14 @@ fn parse_ics(body: &str) -> Vec<CalEvent> {
                 };
                 let name = name_params.split(';').next().unwrap_or("");
                 match name {
-                    "DTSTART" => state.0 = parse_dt(name_params, value),
-                    "DTEND" => state.1 = parse_dt(name_params, value),
-                    "SUMMARY" => state.2 = value.to_string(),
-                    "UID" => state.3 = value.to_string(),
+                    "DTSTART" => state.start = parse_dt(name_params, value),
+                    "DTEND" => state.end = parse_dt(name_params, value),
+                    "SUMMARY" => state.summary = value.to_string(),
+                    "UID" => state.uid = value.to_string(),
                     // The false-positive traps + unexpandable recurrences.
-                    "TRANSP" if value == "TRANSPARENT" => state.4 = true,
-                    "STATUS" if value == "CANCELLED" => state.4 = true,
-                    "RRULE" | "RDATE" => state.4 = true,
+                    "TRANSP" if value == "TRANSPARENT" => state.skip = true,
+                    "STATUS" if value == "CANCELLED" => state.skip = true,
+                    "RRULE" | "RDATE" => state.skip = true,
                     _ => {}
                 }
             }

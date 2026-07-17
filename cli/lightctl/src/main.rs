@@ -140,11 +140,11 @@ fn codex_bridge() -> ! {
 /// JSON on stdin:
 ///
 /// * hook input (`hook_event_name` present):
-///     UserPromptSubmit  → claude/active   (Claude started working)
-///     Stop, SessionEnd  → claude/stopped  (clears "active", fires "finished")
+///   UserPromptSubmit  → claude/active   (Claude started working)
+///   Stop, SessionEnd  → claude/stopped  (clears "active", fires "finished")
 /// * statusline input (everything else): emits claude/usage
-///     {"session": <5h %>, "weekly": <7d %>} when the rate-limit numbers
-///     changed since last tick, and prints a one-line statusline either way.
+///   {"session": <5h %>, "weekly": <7d %>} when the rate-limit numbers
+///   changed since last tick, and prints a one-line statusline either way.
 ///
 /// Always exits 0: a dead status light must never break Claude Code.
 fn claude_bridge() -> ! {

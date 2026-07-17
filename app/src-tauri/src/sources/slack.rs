@@ -19,7 +19,12 @@ use crate::secrets;
 
 pub fn spawn(bus: Bus) {
     tauri::async_runtime::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Slack HTTP client configuration is valid");
         // None = never observed; used to emit initial state exactly once.
         let mut last_status: Option<(String, String)> = None;
         let mut last_presence: Option<String> = None;
@@ -82,14 +87,21 @@ fn str_field(v: &serde_json::Value, key: &str) -> String {
 /// Call a Slack Web API method; None on transport errors or `"ok": false`
 /// (bad token, missing scope) — the loop just tries again next tick.
 async fn api(client: &reqwest::Client, token: &str, method: &str) -> Option<serde_json::Value> {
-    let v: serde_json::Value = client
+    let response = client
         .get(format!("https://slack.com/api/{method}"))
         .bearer_auth(token)
         .send()
         .await
         .ok()?
-        .json()
-        .await
+        .error_for_status()
         .ok()?;
+    if response.content_length().is_some_and(|n| n > 1_048_576) {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    if bytes.len() > 1_048_576 {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     v.get("ok")?.as_bool()?.then_some(v)
 }
