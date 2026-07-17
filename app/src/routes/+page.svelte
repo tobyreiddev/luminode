@@ -15,6 +15,8 @@
     type Schedule,
     type Trigger,
     type IntegrationHealth,
+    type IntegrationDescriptor,
+    type KnownDevice,
   } from "$lib/types";
 
   const NUM_LEDS = 33;
@@ -44,6 +46,9 @@
   let active = $state<ActiveState>({ activeName: "…", snoozedUntilMs: null, overlays: [], quietHoursActive: false });
   let events = $state<BusEvent[]>([]);
   let integrationHealth = $state<IntegrationHealth[]>([]);
+  let integrationCatalog = $state<IntegrationDescriptor[]>([]);
+  let knownDevices = $state<KnownDevice[]>([]);
+  let firmwareCompatibility = $state<{ currentProtocol: number | null; requiredProtocol: number; compatible: boolean; guidance: string } | null>(null);
 
   // --- persisted collections ---
   let animations = $state<Animation[]>([]);
@@ -465,7 +470,11 @@
 
   onMount(() => {
     const unlisteners: Promise<UnlistenFn>[] = [
-      listen<DeviceStatus>("device:status", (e) => (status = e.payload)),
+      listen<DeviceStatus>("device:status", (e) => {
+        status = e.payload;
+        invoke<KnownDevice[]>("known_devices").then((value) => (knownDevices = value));
+        invoke<typeof firmwareCompatibility>("firmware_compatibility").then((value) => (firmwareCompatibility = value));
+      }),
       listen<PortCandidate[]>("device:candidates", (e) => (candidates = e.payload)),
       listen<string>("engine:frame", (e) => (frame = e.payload)),
       listen<ActiveState>("engine:active", (e) => (active = e.payload)),
@@ -499,6 +508,9 @@
       slackSet = await invoke("has_secret", { name: "slack_token" });
       calendarSet = await invoke("has_secret", { name: "calendar_ics_url" });
       integrationHealth = await invoke("integration_health");
+      integrationCatalog = await invoke("integration_catalog");
+      knownDevices = await invoke("known_devices");
+      firmwareCompatibility = await invoke("firmware_compatibility");
       canUndoImport = await invoke("can_undo_import");
       } catch (e) {
         reportError(`Could not load Luminode: ${e}`);
@@ -546,6 +558,9 @@
     <button class:active={view === "automations"} aria-current={view === "automations" ? "page" : undefined} onclick={() => (view = "automations")}>Automations</button>
     <button class:active={view === "integrations"} aria-current={view === "integrations" ? "page" : undefined} onclick={() => (view = "integrations")}>Integrations & history</button>
   </nav>
+  {#if firmwareCompatibility && !firmwareCompatibility.compatible}
+    <aside class="firmware-warning" role="alert"><strong>Firmware update required</strong><span>Protocol {firmwareCompatibility.currentProtocol} is older than required protocol {firmwareCompatibility.requiredProtocol}. {firmwareCompatibility.guidance}</span></aside>
+  {/if}
   {#if !status.connected && candidates.length === 0}
     <aside class="onboarding">
       <strong>Connect your Luminode</strong>
@@ -864,6 +879,14 @@
           </article>
         {/each}
       </div>
+      <details>
+        <summary>Available event sources</summary>
+        <div class="catalog-grid">{#each integrationCatalog as item (item.source)}<article><strong>{item.name}</strong><small>{item.source} · {item.setup}</small><small>{item.events.join(", ")}</small></article>{/each}</div>
+      </details>
+      {#if knownDevices.length > 0}
+        <h2>Known devices</h2>
+        <ul class="list">{#each knownDevices as device}<li><span class="grow"><strong>{device.serialNumber ?? device.lastPort}</strong><br /><small>fw {device.fwVersion} · {device.ledCount} LEDs · last seen {new Date(device.lastSeenMs).toLocaleString()}</small></span></li>{/each}</ul>
+      {/if}
       <div class="field">
         <label for="slacktok">Slack {slackSet ? "✓" : ""}</label>
         <input id="slacktok" type="password" placeholder={slackSet ? "token saved — paste to replace, save empty to clear" : "xoxp- user token"} bind:value={slackInput} />
@@ -959,6 +982,9 @@
   .health-card { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
   .health-card.healthy { border-color: #27653d; }
   .health-card.error { border-color: #8c3941; }
+  .firmware-warning { display: flex; flex-direction: column; gap: 5px; padding: 12px 16px; margin-bottom: 16px; border: 1px solid #9b3f45; background: #351b20; border-radius: 9px; }
+  .catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 10px 0 16px; }
+  .catalog-grid article { display: flex; flex-direction: column; gap: 4px; padding: 10px; background: var(--surface); border-radius: 8px; }
   .pill {
     padding: 3px 10px;
     border-radius: 99px;

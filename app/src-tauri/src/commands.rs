@@ -687,6 +687,40 @@ pub fn integration_health(state: State<AppState>) -> Vec<crate::health::Integrat
     state.health.snapshot()
 }
 
+#[tauri::command]
+pub fn integration_catalog() -> Vec<crate::catalog::IntegrationDescriptor> {
+    crate::catalog::all()
+}
+
+#[tauri::command]
+pub fn known_devices(state: State<AppState>) -> Vec<crate::store::KnownDevice> {
+    state.store.known_devices()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirmwareCompatibility {
+    current_protocol: Option<u8>,
+    required_protocol: u8,
+    compatible: bool,
+    guidance: &'static str,
+}
+
+#[tauri::command]
+pub fn firmware_compatibility(state: State<AppState>) -> FirmwareCompatibility {
+    let protocol = state
+        .device_status
+        .lock()
+        .ok()
+        .and_then(|s| s.protocol_version);
+    FirmwareCompatibility {
+        current_protocol: protocol,
+        required_protocol: 2,
+        compatible: protocol.is_none_or(|p| p >= 2),
+        guidance: "Rebuild and flash firmware/luminode/luminode.ino; see README Firmware section.",
+    }
+}
+
 /// Inject a synthetic event — lets users test triggers from the UI without
 /// wiring up a real integration first.
 #[tauri::command]

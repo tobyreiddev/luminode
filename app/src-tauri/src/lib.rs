@@ -11,6 +11,7 @@
 //! all happens in `.setup()`.
 
 mod animation;
+mod catalog;
 mod commands;
 mod device;
 mod events;
@@ -205,6 +206,9 @@ pub fn run() {
             commands::set_secret,
             commands::has_secret,
             commands::integration_health,
+            commands::integration_catalog,
+            commands::known_devices,
+            commands::firmware_compatibility,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

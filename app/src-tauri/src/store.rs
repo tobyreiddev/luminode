@@ -21,6 +21,16 @@ use crate::events::Event;
 #[derive(Clone)]
 pub struct Store(Arc<Mutex<Connection>>);
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownDevice {
+    pub serial_number: Option<String>,
+    pub last_port: String,
+    pub led_count: u32,
+    pub fw_version: String,
+    pub last_seen_ms: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Animation {
@@ -282,6 +292,14 @@ impl Store {
                 led_count     INTEGER,
                 fw_version    TEXT,
                 last_seen_ms  INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS devices (
+                identity      TEXT PRIMARY KEY,
+                serial_number TEXT,
+                last_port     TEXT NOT NULL,
+                led_count     INTEGER NOT NULL,
+                fw_version    TEXT NOT NULL,
+                last_seen_ms  INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS animations (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -753,6 +771,30 @@ impl Store {
                 crate::events::now_ms()
             ],
         );
+        let identity = serial_number.unwrap_or(port);
+        let _ = conn.execute(
+            "INSERT INTO devices(identity,serial_number,last_port,led_count,fw_version,last_seen_ms)
+             VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(identity) DO UPDATE SET
+             serial_number=excluded.serial_number,last_port=excluded.last_port,
+             led_count=excluded.led_count,fw_version=excluded.fw_version,last_seen_ms=excluded.last_seen_ms",
+            params![identity, serial_number, port, led_count, fw_version, crate::events::now_ms()],
+        );
+    }
+
+    pub fn known_devices(&self) -> Vec<KnownDevice> {
+        let conn = self.0.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare("SELECT serial_number,last_port,led_count,fw_version,last_seen_ms FROM devices ORDER BY last_seen_ms DESC") else { return Vec::new() };
+        stmt.query_map([], |row| {
+            Ok(KnownDevice {
+                serial_number: row.get(0)?,
+                last_port: row.get(1)?,
+                led_count: row.get(2)?,
+                fw_version: row.get(3)?,
+                last_seen_ms: row.get(4)?,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
     }
 
     pub fn clear_device_identity(&self) {

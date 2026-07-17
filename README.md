@@ -57,6 +57,23 @@ plenty fast at 33 LEDs:
 | GND        | GND (common with the supply)                                                                  |
 | 5V         | 5 V supply — USB bus power works out of the box: firmware caps total draw at `POWER_BUDGET_MA` (450 mA). Full white at full brightness wants ≈ 2 A, so for that, use an external supply and raise the budget in the sketch |
 
+### Firmware compatibility and updates
+
+The desktop app reports the connected firmware and serial protocol version in
+the status header and diagnostics export. Protocol 2 or newer is required for
+fully native effects; older firmware remains discoverable but the app displays
+an update warning.
+
+To update, install the pinned Arduino dependencies from Prerequisites, then run:
+
+```sh
+arduino-cli compile --fqbn arduino:avr:micro firmware/luminode
+arduino-cli upload -p /dev/cu.usbmodemXXXX --fqbn arduino:avr:micro firmware/luminode
+```
+
+Only flash firmware from this repository or another trusted, reviewed source.
+The macOS bootloader caveat below applies if the upload port does not appear.
+
 ## Build & run
 
 ```sh

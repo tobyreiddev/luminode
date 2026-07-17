@@ -82,6 +82,8 @@ export interface IntegrationHealth {
   lastAttemptMs: number | null;
   lastSuccessMs: number | null;
 }
+export interface IntegrationDescriptor { source: string; name: string; setup: string; events: string[]; }
+export interface KnownDevice { serialNumber: string | null; lastPort: string; ledCount: number; fwVersion: string; lastSeenMs: number; }
 
 export interface OverlayInfo {
   key: string;
