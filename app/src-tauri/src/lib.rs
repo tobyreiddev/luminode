@@ -172,6 +172,7 @@ pub fn run() {
             commands::clear_manual,
             commands::set_brightness,
             commands::get_brightness,
+            commands::set_preview_visible,
             commands::list_animations,
             commands::save_animation,
             commands::update_animation,

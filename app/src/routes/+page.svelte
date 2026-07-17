@@ -511,6 +511,9 @@
         }
       }),
     ];
+    const onVisibility = () => invoke("set_preview_visible", { visible: !document.hidden });
+    document.addEventListener("visibilitychange", onVisibility);
+    onVisibility();
     (async () => {
       try {
       status = await invoke("get_status");
@@ -538,6 +541,8 @@
       }
     })();
     return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      invoke("set_preview_visible", { visible: false });
       unlisteners.forEach((p) => p.then((un) => un()));
     };
   });

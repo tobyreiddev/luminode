@@ -14,7 +14,7 @@
 //! simulated strip preview works with no Arduino attached.
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::TrySendError;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -165,6 +165,7 @@ pub struct EngineShared {
     /// version optimistically: worst case an old firmware answers new
     /// effect names with an `err` event instead of us streaming at it.
     pub device_proto: AtomicU8,
+    pub preview_visible: AtomicBool,
 }
 
 impl EngineShared {
@@ -175,6 +176,7 @@ impl EngineShared {
             brightness_gen: AtomicU64::new(1),
             connection_epoch: AtomicU64::new(0),
             device_proto: AtomicU8::new(2),
+            preview_visible: AtomicBool::new(true),
         }
     }
 
@@ -294,7 +296,7 @@ fn run(
         last_frame = frame.clone();
 
         // Preview for the UI at ~10fps (every 3rd tick) to keep IPC cheap.
-        if tick_count.is_multiple_of(3) {
+        if tick_count.is_multiple_of(3) && shared.preview_visible.load(Ordering::Relaxed) {
             let _ = app.emit("engine:frame", frame_to_hex(&frame));
         }
 

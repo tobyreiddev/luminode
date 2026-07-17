@@ -228,6 +228,14 @@ pub fn get_brightness(state: State<AppState>) -> u8 {
 }
 
 #[tauri::command]
+pub fn set_preview_visible(state: State<AppState>, visible: bool) {
+    state
+        .engine
+        .preview_visible
+        .store(visible, Ordering::Relaxed);
+}
+
+#[tauri::command]
 pub fn list_animations(state: State<AppState>) -> Vec<Animation> {
     state.store.list_animations()
 }
