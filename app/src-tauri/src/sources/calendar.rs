@@ -218,3 +218,24 @@ fn parse_dt(name_params: &str, value: &str) -> Option<DateTime<Utc>> {
         .single()
         .map(|dt| dt.with_timezone(&Utc))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_timed_event_and_unfolds_summary() {
+        let events = parse_ics("BEGIN:VEVENT\nUID:1\nDTSTART:20260717T010000Z\nDTEND:20260717T020000Z\nSUMMARY:Design \n review\nEND:VEVENT");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].summary, "Design review");
+    }
+
+    #[test]
+    fn skips_cancelled_free_all_day_and_recurring_events() {
+        for extra in ["STATUS:CANCELLED", "TRANSP:TRANSPARENT", "RRULE:FREQ=DAILY"] {
+            let body = format!("BEGIN:VEVENT\nUID:1\nDTSTART:20260717T010000Z\nDTEND:20260717T020000Z\n{extra}\nEND:VEVENT");
+            assert!(parse_ics(&body).is_empty());
+        }
+        assert!(parse_ics("BEGIN:VEVENT\nUID:1\nDTSTART;VALUE=DATE:20260717\nDTEND;VALUE=DATE:20260718\nEND:VEVENT").is_empty());
+    }
+}

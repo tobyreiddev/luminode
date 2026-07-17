@@ -564,3 +564,64 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
     };
     [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_rejects_untrusted_values() {
+        assert!(AnimSpec {
+            effect: "shell".into(),
+            ..AnimSpec::default()
+        }
+        .validate()
+        .is_err());
+        assert!(AnimSpec {
+            speed: f32::NAN,
+            ..AnimSpec::default()
+        }
+        .validate()
+        .is_err());
+        assert!(AnimSpec {
+            progress: Some(2.0),
+            ..AnimSpec::default()
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn keyframes_are_bounded() {
+        let spec = AnimSpec {
+            effect: "keyframes".into(),
+            keyframes: Some(vec![[1, 2, 3]; 17]),
+            ..AnimSpec::default()
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn every_supported_effect_renders_requested_led_count() {
+        for effect in [
+            "off",
+            "solid",
+            "breathe",
+            "rainbow",
+            "chase",
+            "sparkle",
+            "flash",
+            "gradient",
+            "progress",
+            "dual_progress",
+            "keyframes",
+        ] {
+            let spec = AnimSpec {
+                effect: effect.into(),
+                keyframes: (effect == "keyframes").then_some(vec![[0, 0, 0], [255, 0, 0]]),
+                ..AnimSpec::default()
+            };
+            assert_eq!(render(&spec, 1234, 33).len(), 33, "{effect}");
+        }
+    }
+}

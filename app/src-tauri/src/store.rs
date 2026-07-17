@@ -901,3 +901,40 @@ fn migrate_legacy_names(conn: &Connection) -> rusqlite::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_seeds_and_queries_animation_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        let animation = store.list_animations().into_iter().next().unwrap();
+        assert_eq!(store.animation(animation.id).unwrap().name, animation.name);
+    }
+
+    #[test]
+    fn deleting_custom_animation_cascades_triggers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        let id = store
+            .save_animation("Temporary", &AnimSpec::default(), false, None)
+            .unwrap();
+        store
+            .save_trigger(&Trigger {
+                id: 0,
+                name: "Temporary trigger".into(),
+                source: "cli".into(),
+                event_type: "test".into(),
+                clear_event_type: None,
+                animation_id: id,
+                priority: 1,
+                duration_ms: None,
+                enabled: true,
+            })
+            .unwrap();
+        store.delete_animation(id).unwrap();
+        assert!(store.list_triggers().iter().all(|t| t.animation_id != id));
+    }
+}

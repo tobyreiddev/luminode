@@ -38,3 +38,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 # CFString/CFRunLoop wrappers for the screen-lock notification observer.
 core-foundation = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

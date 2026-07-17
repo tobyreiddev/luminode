@@ -130,3 +130,27 @@ fn parse_line(line: &str) -> Option<Event> {
     let payload = v.get("payload").cloned().unwrap_or(serde_json::Value::Null);
     Some(Event::new(source, &event_type, payload))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_known_sources_and_sane_types_are_accepted() {
+        assert!(parse_line(r#"{"source":"codex","type":"active"}"#).is_some());
+        assert!(parse_line(r#"{"source":"system","type":"screen_locked"}"#).is_none());
+        assert!(parse_line(r#"{"type":""}"#).is_none());
+        assert!(parse_line("not json").is_none());
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_rejects_oversized_lines() {
+        let input = format!("{}\n", "x".repeat(MAX_LINE_BYTES));
+        let mut reader = BufReader::new(input.as_bytes());
+        assert!(read_bounded_line(&mut reader)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none());
+    }
+}
