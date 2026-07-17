@@ -26,6 +26,7 @@
   const TWO_COLOR_EFFECTS = new Set(["flash", "gradient", "progress", "dual_progress"]);
   type View = "home" | "automations" | "integrations";
   let view = $state<View>("home");
+  let theme = $state<"system" | "dark" | "light">("system");
   let toast = $state<{ message: string; kind: "ok" | "error" } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -324,6 +325,24 @@
     await invoke("reorder_triggers", { ids: triggers.map((t) => t.id) });
     triggers = await invoke("list_triggers");
   }
+  async function moveTrigger(index: number, delta: number) {
+    const target = index + delta;
+    if (target < 0 || target >= triggers.length) return;
+    const reordered = [...triggers];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    triggers = reordered;
+    await invoke("reorder_triggers", { ids: triggers.map((t) => t.id) });
+    triggers = await invoke("list_triggers");
+  }
+  function applyTheme(value: "system" | "dark" | "light") {
+    theme = value;
+    document.documentElement.dataset.theme = value;
+    localStorage.setItem("luminode-theme", value);
+  }
+  async function refreshHealth() {
+    integrationHealth = await invoke("integration_health");
+    notify("Integration health refreshed");
+  }
 
   // -- schedules --
   let editingSchedule = $state<Schedule | null>(null);
@@ -469,6 +488,8 @@
   }
 
   onMount(() => {
+    const savedTheme = localStorage.getItem("luminode-theme");
+    if (savedTheme === "dark" || savedTheme === "light" || savedTheme === "system") applyTheme(savedTheme);
     const unlisteners: Promise<UnlistenFn>[] = [
       listen<DeviceStatus>("device:status", (e) => {
         status = e.payload;
@@ -557,6 +578,7 @@
     <button class:active={view === "home"} aria-current={view === "home" ? "page" : undefined} onclick={() => (view = "home")}>Home</button>
     <button class:active={view === "automations"} aria-current={view === "automations" ? "page" : undefined} onclick={() => (view = "automations")}>Automations</button>
     <button class:active={view === "integrations"} aria-current={view === "integrations" ? "page" : undefined} onclick={() => (view = "integrations")}>Integrations & history</button>
+    <label class="theme-picker">Theme <select bind:value={theme} onchange={() => applyTheme(theme)}><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
   </nav>
   {#if firmwareCompatibility && !firmwareCompatibility.compatible}
     <aside class="firmware-warning" role="alert"><strong>Firmware update required</strong><span>Protocol {firmwareCompatibility.currentProtocol} is older than required protocol {firmwareCompatibility.requiredProtocol}. {firmwareCompatibility.guidance}</span></aside>
@@ -713,6 +735,7 @@
             ondragend={onTriggerDragEnd}
           >
             <span class="handle" title="Drag to reorder">⠿</span>
+            <span class="reorder-buttons"><button class="subtle" aria-label={`Move ${t.name} up`} disabled={i === 0} onclick={() => moveTrigger(i, -1)}>↑</button><button class="subtle" aria-label={`Move ${t.name} down`} disabled={i === triggers.length - 1} onclick={() => moveTrigger(i, 1)}>↓</button></span>
             <span class="grow">
               <strong>{t.name}</strong><br />
               <small>
@@ -868,7 +891,7 @@
 
     <!-- ======= events ======= -->
     <section class="integrations-view">
-      <h2>Integrations</h2>
+      <h2>Integrations <button class="subtle" onclick={refreshHealth}>Refresh health</button></h2>
       <div class="health-grid">
         {#each integrationHealth as item (item.source)}
           <article class="health-card {item.status}">
@@ -947,6 +970,16 @@
     color: var(--text);
     font-size: 14px;
   }
+  :global(html[data-theme="light"] body) {
+    --bg: #f5f6f8; --surface: #ffffff; --surface-raised: #eef1f5;
+    --border: #c8ced8; --text: #181b20; --muted: #5e6672; --accent: #285fd4;
+  }
+  @media (prefers-color-scheme: light) {
+    :global(html[data-theme="system"] body), :global(html:not([data-theme]) body) {
+      --bg: #f5f6f8; --surface: #ffffff; --surface-raised: #eef1f5;
+      --border: #c8ced8; --text: #181b20; --muted: #5e6672; --accent: #285fd4;
+    }
+  }
   main { padding: 20px 24px 32px; max-width: 1280px; margin: 0 auto; }
   header { margin-bottom: 14px; }
 
@@ -970,6 +1003,7 @@
   .tabs { display: flex; gap: 4px; margin: 0 0 18px; border-bottom: 1px solid var(--border); }
   .tabs button { border: 0; border-radius: 7px 7px 0 0; padding: 10px 14px; background: transparent; color: var(--muted); }
   .tabs button.active { color: var(--text); background: var(--surface); box-shadow: inset 0 -2px var(--accent); }
+  .theme-picker { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
   main[data-view="home"] section:not(.home-view),
   main[data-view="automations"] section:not(.automations-view),
   main[data-view="integrations"] section:not(.integrations-view) { display: none; }
@@ -1065,6 +1099,8 @@
   /* drag-to-reorder */
   .handle { cursor: grab; color: #6f7683; flex: none; user-select: none; }
   .handle.spacer { visibility: hidden; }
+  .reorder-buttons { display: inline-flex; }
+  .reorder-buttons button { padding: 2px 5px; min-height: 28px; }
   .list li.dragging { opacity: 0.4; background: #23262c; }
   .list li.idle-row {
     background: transparent;
