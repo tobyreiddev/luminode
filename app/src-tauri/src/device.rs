@@ -259,12 +259,7 @@ fn run(ctx: DeviceCtx, rx: Receiver<DeviceMsg>) {
     }
 }
 
-fn handle_msg(
-    ctx: &DeviceCtx,
-    conn: &mut Option<Connection>,
-    prober: &mut Prober,
-    msg: DeviceMsg,
-) {
+fn handle_msg(ctx: &DeviceCtx, conn: &mut Option<Connection>, prober: &mut Prober, msg: DeviceMsg) {
     match msg {
         DeviceMsg::Frame(hex) => {
             write_line(ctx, conn, &format!(r#"{{"cmd":"frame","px":"{hex}"}}"#));
@@ -296,7 +291,11 @@ fn handle_msg(
             write_line(
                 ctx,
                 conn,
-                &format!(r#"{{"cmd":"progress","a":{},"b":{}}}"#, round3(a), round3(b)),
+                &format!(
+                    r#"{{"cmd":"progress","a":{},"b":{}}}"#,
+                    round3(a),
+                    round3(b)
+                ),
             );
         }
         DeviceMsg::Brightness(value) => {
@@ -400,9 +399,7 @@ fn handle_device_line(ctx: &DeviceCtx, c: &mut Connection, line: &str) {
 fn heartbeat(c: &mut Connection) -> bool {
     // Defer the ping (rather than sleep) if another write just went out —
     // same MIN_WRITE_GAP rationale as write_line, and a ping is never urgent.
-    if c.last_ping_sent.elapsed() >= HEARTBEAT_INTERVAL
-        && c.last_write.elapsed() >= MIN_WRITE_GAP
-    {
+    if c.last_ping_sent.elapsed() >= HEARTBEAT_INTERVAL && c.last_write.elapsed() >= MIN_WRITE_GAP {
         c.last_ping_sent = Instant::now();
         c.last_write = Instant::now();
         let mut data = br#"{"cmd":"ping"}"#.to_vec();
@@ -626,7 +623,11 @@ fn probe(port_name: &str) -> Option<(Connection, serde_json::Value)> {
     None
 }
 
-fn adopt(ctx: &DeviceCtx, conn: &mut Option<Connection>, (c, pong): (Connection, serde_json::Value)) {
+fn adopt(
+    ctx: &DeviceCtx,
+    conn: &mut Option<Connection>,
+    (c, pong): (Connection, serde_json::Value),
+) {
     let serial_number = list_candidates()
         .iter()
         .find(|cand| cand.port == c.port_name)

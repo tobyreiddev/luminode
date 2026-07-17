@@ -22,9 +22,9 @@ mod triggers;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri_plugin_autostart::ManagerExt as _;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as _;
 
 use animation::EngineShared;
 use device::{DeviceMsg, DeviceStatus, PortCandidate};
@@ -45,7 +45,6 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -131,8 +130,7 @@ pub fn run() {
             {
                 let triggers = trigger_engine.clone();
                 tauri::async_runtime::spawn(async move {
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_millis(250));
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
                     loop {
                         interval.tick().await;
                         triggers.recompute();

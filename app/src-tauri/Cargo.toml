@@ -16,7 +16,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
 # Start-at-login toggle (tray menu) and native save/open dialogs for
 # config export/import.
 tauri-plugin-autostart = "2"

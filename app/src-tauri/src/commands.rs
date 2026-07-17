@@ -12,6 +12,85 @@ use crate::store::{Animation, Schedule, Trigger};
 use crate::triggers::ActiveState;
 use crate::AppState;
 
+const MAX_NAME_LEN: usize = 100;
+const MAX_EVENT_LEN: usize = 64;
+const MAX_DURATION_MS: i64 = 86_400_000;
+
+fn validate_text(value: &str, label: &str, max: usize) -> Result<(), String> {
+    let len = value.chars().count();
+    if value.trim().is_empty() {
+        return Err(format!("{label} cannot be empty"));
+    }
+    if len > max || value.chars().any(char::is_control) {
+        return Err(format!(
+            "{label} must be at most {max} printable characters"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_duration(value: Option<i64>, label: &str) -> Result<(), String> {
+    if value.is_some_and(|v| !(1..=MAX_DURATION_MS).contains(&v)) {
+        return Err(format!("{label} must be between 1 ms and 24 hours"));
+    }
+    Ok(())
+}
+
+fn validate_animation_input(
+    name: &str,
+    spec: &AnimSpec,
+    duration: Option<i64>,
+) -> Result<(), String> {
+    validate_text(name, "animation name", MAX_NAME_LEN)?;
+    validate_duration(duration, "animation duration")?;
+    spec.validate()
+}
+
+fn validate_trigger_input(state: &AppState, trigger: &Trigger) -> Result<(), String> {
+    validate_text(&trigger.name, "trigger name", MAX_NAME_LEN)?;
+    validate_text(&trigger.source, "event source", MAX_EVENT_LEN)?;
+    validate_text(&trigger.event_type, "event type", MAX_EVENT_LEN)?;
+    if let Some(clear) = trigger.clear_event_type.as_deref() {
+        validate_text(clear, "clear event type", MAX_EVENT_LEN)?;
+    }
+    validate_duration(trigger.duration_ms, "trigger duration")?;
+    if !(-10_000..=10_000).contains(&trigger.priority) {
+        return Err("trigger priority is outside the supported range".into());
+    }
+    if state.store.animation(trigger.animation_id).is_none() {
+        return Err("trigger references an unknown animation".into());
+    }
+    Ok(())
+}
+
+fn validate_schedule_input(state: &AppState, schedule: &Schedule) -> Result<(), String> {
+    validate_text(&schedule.name, "schedule name", MAX_NAME_LEN)?;
+    let valid_time = schedule.time.len() == 5
+        && schedule.time.as_bytes()[2] == b':'
+        && schedule.time[0..2].parse::<u8>().is_ok_and(|h| h < 24)
+        && schedule.time[3..5].parse::<u8>().is_ok_and(|m| m < 60);
+    if !valid_time {
+        return Err("schedule time must be HH:MM in 24-hour time".into());
+    }
+    match schedule.action.as_str() {
+        "emit" => validate_text(
+            schedule.event_type.as_deref().unwrap_or(""),
+            "schedule event type",
+            MAX_EVENT_LEN,
+        )?,
+        "idle" => {
+            let id = schedule
+                .animation_id
+                .ok_or("idle schedules need an animation")?;
+            if state.store.animation(id).is_none() {
+                return Err("schedule references an unknown animation".into());
+            }
+        }
+        _ => return Err("schedule action must be 'emit' or 'idle'".into()),
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_status(state: State<AppState>) -> DeviceStatus {
     state.device_status.lock().unwrap().clone()
@@ -23,8 +102,10 @@ pub fn list_candidates(state: State<AppState>) -> Vec<PortCandidate> {
 }
 
 #[tauri::command]
-pub fn adopt_device(state: State<AppState>, port: String) {
+pub fn adopt_device(state: State<AppState>, port: String) -> Result<(), String> {
+    validate_text(&port, "device port", 512)?;
     let _ = state.device_tx.try_send(DeviceMsg::Adopt(port));
+    Ok(())
 }
 
 #[tauri::command]
@@ -33,10 +114,12 @@ pub fn forget_device(state: State<AppState>) {
 }
 
 #[tauri::command]
-pub fn set_manual(state: State<AppState>, spec: AnimSpec) {
+pub fn set_manual(state: State<AppState>, spec: AnimSpec) -> Result<(), String> {
+    spec.validate()?;
     // Hand-built manual state pins until released; only animation Apply
     // (below) picks up an intrinsic duration.
     state.triggers.set_manual(spec, None);
+    Ok(())
 }
 
 #[tauri::command]
@@ -67,6 +150,7 @@ pub fn save_animation(
     spec: AnimSpec,
     duration_ms: Option<i64>,
 ) -> Result<i64, String> {
+    validate_animation_input(&name, &spec, duration_ms)?;
     state
         .store
         .save_animation(&name, &spec, false, duration_ms)
@@ -81,6 +165,7 @@ pub fn update_animation(
     spec: AnimSpec,
     duration_ms: Option<i64>,
 ) -> Result<(), String> {
+    validate_animation_input(&name, &spec, duration_ms)?;
     state
         .store
         .update_animation(id, &name, &spec, duration_ms)
@@ -110,11 +195,15 @@ pub fn apply_animation(state: State<AppState>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_idle_animation(state: State<AppState>, id: i64) {
+pub fn set_idle_animation(state: State<AppState>, id: i64) -> Result<(), String> {
+    if state.store.animation(id).is_none() {
+        return Err("unknown idle animation".into());
+    }
     state
         .store
         .set_setting("idle_animation_id", &id.to_string());
     state.triggers.recompute();
+    Ok(())
 }
 
 #[tauri::command]
@@ -152,7 +241,11 @@ pub fn list_triggers(state: State<AppState>) -> Vec<Trigger> {
 
 #[tauri::command]
 pub fn save_trigger(state: State<AppState>, trigger: Trigger) -> Result<i64, String> {
-    let id = state.store.save_trigger(&trigger).map_err(|e| e.to_string())?;
+    validate_trigger_input(&state, &trigger)?;
+    let id = state
+        .store
+        .save_trigger(&trigger)
+        .map_err(|e| e.to_string())?;
     // Disabling a trigger must kill its live overlay, not just future fires.
     state.triggers.sync_with_store();
     Ok(id)
@@ -161,7 +254,10 @@ pub fn save_trigger(state: State<AppState>, trigger: Trigger) -> Result<i64, Str
 /// Persist a drag-reorder: `ids` in display order, first = highest priority.
 #[tauri::command]
 pub fn reorder_triggers(state: State<AppState>, ids: Vec<i64>) -> Result<(), String> {
-    state.store.reorder_triggers(&ids).map_err(|e| e.to_string())?;
+    state
+        .store
+        .reorder_triggers(&ids)
+        .map_err(|e| e.to_string())?;
     state.triggers.sync_with_store();
     Ok(())
 }
@@ -175,7 +271,7 @@ pub fn delete_trigger(state: State<AppState>, id: i64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn recent_events(state: State<AppState>, limit: u32) -> Vec<Event> {
-    state.store.recent_events(limit)
+    state.store.recent_events(limit.min(500))
 }
 
 #[tauri::command]
@@ -185,7 +281,7 @@ pub fn get_active(state: State<AppState>) -> ActiveState {
 
 #[tauri::command]
 pub fn snooze(state: State<AppState>, minutes: u64) {
-    state.triggers.snooze(minutes);
+    state.triggers.snooze(minutes.min(24 * 60));
 }
 
 // -- schedules ---------------------------------------------------------------
@@ -197,6 +293,7 @@ pub fn list_schedules(state: State<AppState>) -> Vec<Schedule> {
 
 #[tauri::command]
 pub fn save_schedule(state: State<AppState>, schedule: Schedule) -> Result<i64, String> {
+    validate_schedule_input(&state, &schedule)?;
     state
         .store
         .save_schedule(&schedule)
@@ -261,7 +358,12 @@ struct ConfigSchedule {
 #[tauri::command]
 pub fn export_config(state: State<AppState>, path: String) -> Result<(), String> {
     let animations = state.store.list_animations();
-    let name_of = |id: i64| animations.iter().find(|a| a.id == id).map(|a| a.name.clone());
+    let name_of = |id: i64| {
+        animations
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| a.name.clone())
+    };
     let file = ConfigFile {
         version: 1,
         animations: animations
@@ -317,7 +419,8 @@ pub fn export_config(state: State<AppState>, path: String) -> Result<(), String>
 #[tauri::command]
 pub fn import_config(state: State<AppState>, path: String) -> Result<String, String> {
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let file: ConfigFile = serde_json::from_str(&raw).map_err(|e| format!("not a Luminode config: {e}"))?;
+    let file: ConfigFile =
+        serde_json::from_str(&raw).map_err(|e| format!("not a Luminode config: {e}"))?;
 
     for a in &file.animations {
         state
@@ -331,7 +434,9 @@ pub fn import_config(state: State<AppState>, path: String) -> Result<String, Str
     let existing_triggers = state.store.list_triggers();
     let mut trigger_count = 0;
     for t in &file.triggers {
-        let Some(animation_id) = id_of(&t.animation) else { continue };
+        let Some(animation_id) = id_of(&t.animation) else {
+            continue;
+        };
         let id = existing_triggers
             .iter()
             .find(|e| e.name == t.name)
@@ -416,6 +521,16 @@ pub fn simulate_event(
     source: String,
     event_type: String,
     payload: serde_json::Value,
-) {
+) -> Result<(), String> {
+    validate_text(&source, "event source", MAX_EVENT_LEN)?;
+    validate_text(&event_type, "event type", MAX_EVENT_LEN)?;
+    if serde_json::to_vec(&payload)
+        .map_err(|e| e.to_string())?
+        .len()
+        > 65_536
+    {
+        return Err("event payload is larger than 64 KiB".into());
+    }
     let _ = state.bus.send(Event::new(&source, &event_type, payload));
+    Ok(())
 }

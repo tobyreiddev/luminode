@@ -27,7 +27,11 @@ pub fn spawn(bus: crate::events::Bus) {
                     was_asleep = asleep;
                     let _ = bus.send(Event::new(
                         "system",
-                        if asleep { "display_slept" } else { "display_woke" },
+                        if asleep {
+                            "display_slept"
+                        } else {
+                            "display_woke"
+                        },
                         serde_json::Value::Null,
                     ));
                 }

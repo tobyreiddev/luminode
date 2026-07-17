@@ -12,6 +12,8 @@
 //!                                      Claude Code pipes to hooks and
 //!                                      statusline commands, emits claude/*
 //!                                      events (see claude_bridge below)
+//!   lightctl codex                     Codex hook bridge: emits codex/active
+//!                                      and codex/stopped from hook JSON
 //!
 //! Transport: one JSON line per event over the app's unix socket
 //! ({"type": ..., "payload": ...}), reply "ok". Socket path defaults to the
@@ -64,7 +66,7 @@ fn send_from(source: &str, event_type: &str, payload: serde_json::Value) -> bool
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  lightctl progress <0-100|done>\n  lightctl event <type> [json-payload]\n  lightctl run -- <command> [args...]\n  lightctl claude    (stdin bridge for Claude Code hooks/statusline)"
+        "usage:\n  lightctl progress <0-100|done>\n  lightctl event <type> [json-payload]\n  lightctl run -- <command> [args...]\n  lightctl claude    (stdin bridge for Claude Code hooks/statusline)\n  lightctl codex     (stdin bridge for Codex hooks)"
     );
     exit(2);
 }
@@ -106,8 +108,31 @@ fn main() {
             run_wrapped(rest);
         }
         Some("claude") => claude_bridge(),
+        Some("codex") => codex_bridge(),
         _ => usage(),
     }
+}
+
+/// Bridge Codex command hooks into the event bus. Codex sends a JSON object
+/// containing `hook_event_name` on stdin. Always exits successfully so light
+/// status can never interrupt an agent turn.
+fn codex_bridge() -> ! {
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        exit(0);
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+        match v.get("hook_event_name").and_then(|h| h.as_str()) {
+            Some("UserPromptSubmit") => {
+                send_from("codex", "active", serde_json::Value::Null);
+            }
+            Some("Stop") => {
+                send_from("codex", "stopped", serde_json::Value::Null);
+            }
+            _ => {}
+        }
+    }
+    exit(0);
 }
 
 /// Bridge for Claude Code. Wire it up in ~/.claude/settings.json as both a
@@ -156,10 +181,7 @@ fn claude_bridge() -> ! {
     let weekly = pct("seven_day");
 
     let mut line_parts: Vec<String> = Vec::new();
-    if let Some(model) = v
-        .pointer("/model/display_name")
-        .and_then(|m| m.as_str())
-    {
+    if let Some(model) = v.pointer("/model/display_name").and_then(|m| m.as_str()) {
         line_parts.push(model.to_string());
     }
     if session.is_some() || weekly.is_some() {
@@ -219,7 +241,11 @@ fn run_wrapped(cmd: &[String]) -> ! {
                 "duration_secs": secs,
             });
             send(
-                if status.success() { "run_succeeded" } else { "run_failed" },
+                if status.success() {
+                    "run_succeeded"
+                } else {
+                    "run_failed"
+                },
                 payload,
             );
             exit(code);

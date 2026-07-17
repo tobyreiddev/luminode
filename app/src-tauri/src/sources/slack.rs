@@ -43,8 +43,11 @@ pub fn spawn(bus: Bus) {
                             serde_json::json!({ "text": text, "emoji": emoji }),
                         ));
                     } else if last_status.is_some() {
-                        let _ =
-                            bus.send(Event::new("slack", "status_cleared", serde_json::Value::Null));
+                        let _ = bus.send(Event::new(
+                            "slack",
+                            "status_cleared",
+                            serde_json::Value::Null,
+                        ));
                     }
                     last_status = Some(current);
                 }
@@ -55,7 +58,11 @@ pub fn spawn(bus: Bus) {
                 if !presence.is_empty() && last_presence.as_deref() != Some(&presence) {
                     let _ = bus.send(Event::new(
                         "slack",
-                        if presence == "active" { "presence_active" } else { "presence_away" },
+                        if presence == "active" {
+                            "presence_active"
+                        } else {
+                            "presence_away"
+                        },
                         serde_json::Value::Null,
                     ));
                     last_presence = Some(presence);

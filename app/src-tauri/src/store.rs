@@ -137,6 +137,7 @@ impl Store {
         let store = Self(Arc::new(Mutex::new(conn)));
         store.seed_if_new();
         store.seed_claude();
+        store.seed_codex();
         store.seed_meetings();
         store.seed_display();
         Ok(store)
@@ -158,32 +159,66 @@ impl Store {
             ("Idle Rainbow", AnimSpec::default(), None),
             (
                 "Focus Blue",
-                AnimSpec { effect: "solid".into(), color: [0, 80, 255], speed: 0.3, ..AnimSpec::off() },
+                AnimSpec {
+                    effect: "solid".into(),
+                    color: [0, 80, 255],
+                    speed: 0.3,
+                    ..AnimSpec::off()
+                },
                 None,
             ),
             (
                 "Meeting Red",
-                AnimSpec { effect: "solid".into(), color: [255, 30, 0], speed: 0.3, ..AnimSpec::off() },
+                AnimSpec {
+                    effect: "solid".into(),
+                    color: [255, 30, 0],
+                    speed: 0.3,
+                    ..AnimSpec::off()
+                },
                 None,
             ),
             (
                 "Night Breathe",
-                AnimSpec { effect: "breathe".into(), color: [0, 40, 120], speed: 0.2, ..AnimSpec::off() },
+                AnimSpec {
+                    effect: "breathe".into(),
+                    color: [0, 40, 120],
+                    speed: 0.2,
+                    ..AnimSpec::off()
+                },
                 None,
             ),
             (
                 "Success Flash",
-                AnimSpec { effect: "flash".into(), color: [0, 200, 60], color2: Some([0, 0, 0]), speed: 0.75, ..AnimSpec::off() },
+                AnimSpec {
+                    effect: "flash".into(),
+                    color: [0, 200, 60],
+                    color2: Some([0, 0, 0]),
+                    speed: 0.75,
+                    ..AnimSpec::off()
+                },
                 Some(2_000),
             ),
             (
                 "Failure Flash",
-                AnimSpec { effect: "flash".into(), color: [255, 0, 0], color2: Some([0, 0, 0]), speed: 0.85, ..AnimSpec::off() },
+                AnimSpec {
+                    effect: "flash".into(),
+                    color: [255, 0, 0],
+                    color2: Some([0, 0, 0]),
+                    speed: 0.85,
+                    ..AnimSpec::off()
+                },
                 Some(3_000),
             ),
             (
                 "Progress Bar",
-                AnimSpec { effect: "progress".into(), color: [0, 200, 120], color2: Some([40, 40, 60]), speed: 0.3, progress: Some(0.0), ..AnimSpec::off() },
+                AnimSpec {
+                    effect: "progress".into(),
+                    color: [0, 200, 120],
+                    color2: Some([40, 40, 60]),
+                    speed: 0.3,
+                    progress: Some(0.0),
+                    ..AnimSpec::off()
+                },
                 None,
             ),
         ];
@@ -260,14 +295,27 @@ impl Store {
         let working = self.save_animation(
             "Claude Working",
             // Anthropic clay, breathing: unmistakably "Claude is thinking".
-            &AnimSpec { effect: "breathe".into(), color: [217, 119, 87], speed: 0.35, ..AnimSpec::off() },
+            &AnimSpec {
+                effect: "breathe".into(),
+                color: [217, 119, 87],
+                speed: 0.35,
+                ..AnimSpec::off()
+            },
             true,
             None,
         );
         let usage = self.save_animation(
             "Claude Usage",
             // Session fills amber from the left, weekly violet from the right.
-            &AnimSpec { effect: "dual_progress".into(), color: [255, 160, 40], color2: Some([120, 90, 255]), speed: 0.3, progress: Some(0.0), progress2: Some(0.0), ..AnimSpec::off() },
+            &AnimSpec {
+                effect: "dual_progress".into(),
+                color: [255, 160, 40],
+                color2: Some([120, 90, 255]),
+                speed: 0.3,
+                progress: Some(0.0),
+                progress2: Some(0.0),
+                ..AnimSpec::off()
+            },
             true,
             None,
         );
@@ -327,6 +375,57 @@ impl Store {
         self.set_setting("seeded_claude", "1");
     }
 
+    /// Codex command hooks emit codex/active and codex/stopped through
+    /// `lightctl codex`. Keep this visually distinct from Claude's clay tone.
+    fn seed_codex(&self) {
+        if self.setting("seeded_codex").is_some() {
+            return;
+        }
+        let working = self.save_animation(
+            "Codex Working",
+            &AnimSpec {
+                effect: "breathe".into(),
+                color: [74, 144, 226],
+                speed: 0.42,
+                ..AnimSpec::off()
+            },
+            true,
+            None,
+        );
+        let done_id = self
+            .list_animations()
+            .iter()
+            .find(|a| a.name == "Success Flash")
+            .map(|a| a.id);
+        if let Ok(animation_id) = working {
+            let _ = self.save_trigger(&Trigger {
+                id: 0,
+                name: "Codex working".into(),
+                source: "codex".into(),
+                event_type: "active".into(),
+                clear_event_type: Some("stopped".into()),
+                animation_id,
+                priority: 61,
+                duration_ms: Some(30 * 60_000),
+                enabled: true,
+            });
+        }
+        if let Some(animation_id) = done_id {
+            let _ = self.save_trigger(&Trigger {
+                id: 0,
+                name: "Codex finished".into(),
+                source: "codex".into(),
+                event_type: "stopped".into(),
+                clear_event_type: None,
+                animation_id,
+                priority: 86,
+                duration_ms: Some(4_000),
+                enabled: true,
+            });
+        }
+        self.set_setting("seeded_codex", "1");
+    }
+
     /// Seed wave 3: meeting/call awareness (calendar + mic sources).
     fn seed_meetings(&self) {
         if self.setting("seeded_meetings").is_some() {
@@ -339,8 +438,20 @@ impl Store {
             .map(|a| a.id);
         if let Some(id) = meeting_red {
             for (name, source, event_type, clear, priority) in [
-                ("In a meeting (calendar)", "calendar", "meeting_started", Some("meeting_ended"), 75),
-                ("On a call (mic in use)", "system", "call_started", Some("call_ended"), 72),
+                (
+                    "In a meeting (calendar)",
+                    "calendar",
+                    "meeting_started",
+                    Some("meeting_ended"),
+                    75,
+                ),
+                (
+                    "On a call (mic in use)",
+                    "system",
+                    "call_started",
+                    Some("call_ended"),
+                    72,
+                ),
             ] {
                 let _ = self.save_trigger(&Trigger {
                     id: 0,
@@ -405,11 +516,9 @@ impl Store {
 
     pub fn device_serial_number(&self) -> Option<String> {
         let conn = self.0.lock().unwrap();
-        conn.query_row(
-            "SELECT serial_number FROM device WHERE id = 1",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
+        conn.query_row("SELECT serial_number FROM device WHERE id = 1", [], |row| {
+            row.get::<_, Option<String>>(0)
+        })
         .ok()
         .flatten()
     }
@@ -653,7 +762,14 @@ impl Store {
             conn.execute(
                 "INSERT INTO schedules(name, time, action, event_type, animation_id, enabled)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![s.name, s.time, s.action, s.event_type, s.animation_id, s.enabled as i64],
+                params![
+                    s.name,
+                    s.time,
+                    s.action,
+                    s.event_type,
+                    s.animation_id,
+                    s.enabled as i64
+                ],
             )?;
             Ok(conn.last_insert_rowid())
         } else {
@@ -662,7 +778,12 @@ impl Store {
                                       event_type = ?5, animation_id = ?6, enabled = ?7
                  WHERE id = ?1",
                 params![
-                    s.id, s.name, s.time, s.action, s.event_type, s.animation_id,
+                    s.id,
+                    s.name,
+                    s.time,
+                    s.action,
+                    s.event_type,
+                    s.animation_id,
                     s.enabled as i64
                 ],
             )?;
@@ -719,7 +840,9 @@ impl Store {
 /// IF NOT EXISTS for columns, so probe table_info first.
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) {
     let exists = conn
-        .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+        ))
         .and_then(|mut stmt| stmt.query_row(params![column], |_| Ok(())))
         .is_ok();
     if !exists {

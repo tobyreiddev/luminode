@@ -15,6 +15,13 @@ priority logic lives in one place, never per-integration.
 
 ## Implemented (no credentials needed)
 
+### `codex` — Codex command hooks (via the lightctl socket)
+
+`lightctl codex` reads Codex hook JSON from stdin. `UserPromptSubmit` emits
+`codex/active`; `Stop` emits `codex/stopped`. The root README contains the
+supported `config.toml` hook blocks and documents the seeded working/finished
+animations. The bridge always exits zero so it cannot break an agent turn.
+
 ### `cli` — the lightctl socket (`sources/lightctl.rs`)
 
 The app listens on a unix socket

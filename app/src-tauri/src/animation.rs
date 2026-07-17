@@ -77,6 +77,44 @@ impl Default for AnimSpec {
 }
 
 impl AnimSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        const EFFECTS: &[&str] = &[
+            "off",
+            "solid",
+            "breathe",
+            "rainbow",
+            "chase",
+            "sparkle",
+            "flash",
+            "gradient",
+            "progress",
+            "dual_progress",
+            "keyframes",
+        ];
+        if !EFFECTS.contains(&self.effect.as_str()) {
+            return Err(format!("unknown animation effect: {}", self.effect));
+        }
+        if !self.speed.is_finite() || !(0.0..=1.0).contains(&self.speed) {
+            return Err("animation speed must be between 0 and 1".into());
+        }
+        for (name, value) in [("progress", self.progress), ("progress2", self.progress2)] {
+            if value.is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v)) {
+                return Err(format!("{name} must be between 0 and 1"));
+            }
+        }
+        if let Some(stops) = &self.keyframes {
+            if stops.len() > 16 {
+                return Err("keyframe animations support at most 16 stops".into());
+            }
+            if self.effect == "keyframes" && stops.is_empty() {
+                return Err("keyframe animations need at least one stop".into());
+            }
+        } else if self.effect == "keyframes" {
+            return Err("keyframe animations need at least one stop".into());
+        }
+        Ok(())
+    }
+
     pub fn off() -> Self {
         Self {
             effect: "off".into(),
@@ -404,7 +442,11 @@ pub fn render(spec: &AnimSpec, t_ms: u64, n: usize) -> Vec<[u8; 3]> {
             for (i, px) in frame.iter_mut().enumerate() {
                 let pos = ((i as f32 + offset) % n as f32) / n as f32;
                 // Mirror so the gradient wraps without a hard seam.
-                let t = if pos < 0.5 { pos * 2.0 } else { (1.0 - pos) * 2.0 };
+                let t = if pos < 0.5 {
+                    pos * 2.0
+                } else {
+                    (1.0 - pos) * 2.0
+                };
                 *px = lerp(spec.color, c2, t);
             }
         }

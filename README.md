@@ -208,6 +208,7 @@ lightctl progress done        # clears it
 lightctl run -- cargo test    # green/red flash by exit code, code passed through
 lightctl event my_thing '{"n":1}'   # anything; write a trigger for it
 lightctl claude               # stdin bridge for Claude Code (see Integrations)
+lightctl codex                # stdin bridge for Codex hooks (see Integrations)
 ```
 
 ## Integrations
@@ -215,6 +216,36 @@ lightctl claude               # stdin bridge for Claude Code (see Integrations)
 Full catalog and module conventions: `docs/integrations.md`. Everything
 below emits events onto the bus; what the lights *do* is always a trigger
 you can edit, reorder, or switch off in the UI.
+
+### Codex (manual setup required)
+
+`lightctl codex` turns supported Codex lifecycle hooks into
+`codex/active` and `codex/stopped` events. Luminode seeds a blue breathing
+**Codex Working** animation, a working trigger that clears on Stop, and a
+green finished flash.
+
+Build `lightctl`, then add these command hooks to `~/.codex/config.toml`.
+Replace the command path if your checkout lives elsewhere:
+
+```toml
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/Users/toby/Workspace/luminode/target/release/lightctl codex"
+timeout = 5
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/Users/toby/Workspace/luminode/target/release/lightctl codex"
+timeout = 5
+```
+
+Codex sends hook JSON to the command on stdin. The bridge always exits zero,
+so an unavailable Luminode app cannot interrupt a Codex turn. Restart Codex
+after changing its configuration. Remove the two hook blocks to uninstall.
 
 ### Claude Code (manual setup required)
 

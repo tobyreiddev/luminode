@@ -294,8 +294,7 @@ impl TriggerEngine {
                     expires_in_ms: o
                         .expires_at
                         .map(|t| t.saturating_duration_since(now).as_millis() as u64),
-                    winning: !snoozed
-                        && winner.as_ref().map(|w| w.key == o.key).unwrap_or(false),
+                    winning: !snoozed && winner.as_ref().map(|w| w.key == o.key).unwrap_or(false),
                 })
                 .collect(),
         };

@@ -19,8 +19,8 @@ pub fn spawn(bus: crate::events::Bus) {
         .spawn(move || {
             let mut was_in_use = false;
             loop {
-                let in_use = macos::mic_in_use().unwrap_or(false)
-                    || macos::camera_in_use().unwrap_or(false);
+                let in_use =
+                    macos::mic_in_use().unwrap_or(false) || macos::camera_in_use().unwrap_or(false);
                 if in_use != was_in_use {
                     was_in_use = in_use;
                     let _ = bus.send(Event::new(

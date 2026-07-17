@@ -121,19 +121,31 @@ fn parse_ics(body: &str) -> Vec<CalEvent> {
     }
 
     let mut events = Vec::new();
-    let mut cur: Option<(Option<DateTime<Utc>>, Option<DateTime<Utc>>, String, String, bool)> =
-        None; // (start, end, summary, uid, skip)
+    let mut cur: Option<(
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+        String,
+        String,
+        bool,
+    )> = None; // (start, end, summary, uid, skip)
     for line in &lines {
         match line.as_str() {
             "BEGIN:VEVENT" => cur = Some((None, None, String::new(), String::new(), false)),
             "END:VEVENT" => {
                 if let Some((Some(start), Some(end), summary, uid, false)) = cur.take() {
-                    events.push(CalEvent { uid, summary, start, end });
+                    events.push(CalEvent {
+                        uid,
+                        summary,
+                        start,
+                        end,
+                    });
                 }
             }
             _ => {
                 let Some(state) = cur.as_mut() else { continue };
-                let Some((name_params, value)) = line.split_once(':') else { continue };
+                let Some((name_params, value)) = line.split_once(':') else {
+                    continue;
+                };
                 let name = name_params.split(';').next().unwrap_or("");
                 match name {
                     "DTSTART" => state.0 = parse_dt(name_params, value),
