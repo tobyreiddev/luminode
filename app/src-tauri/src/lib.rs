@@ -195,6 +195,8 @@ pub fn run() {
             commands::export_config,
             commands::export_diagnostics,
             commands::import_config,
+            commands::can_undo_import,
+            commands::undo_import,
             commands::recent_events,
             commands::clear_events,
             commands::get_active,

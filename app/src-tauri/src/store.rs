@@ -105,7 +105,160 @@ pub struct Schedule {
     pub enabled: bool,
 }
 
+pub struct ImportAnimation {
+    pub name: String,
+    pub spec: AnimSpec,
+    pub duration_ms: Option<i64>,
+}
+pub struct ImportTrigger {
+    pub name: String,
+    pub source: String,
+    pub event_type: String,
+    pub clear_event_type: Option<String>,
+    pub animation: String,
+    pub priority: i32,
+    pub duration_ms: Option<i64>,
+    pub enabled: bool,
+    pub policy: TriggerPolicy,
+}
+pub struct ImportSchedule {
+    pub name: String,
+    pub time: String,
+    pub action: String,
+    pub event_type: Option<String>,
+    pub animation: Option<String>,
+    pub enabled: bool,
+}
+pub struct ImportBundle {
+    pub animations: Vec<ImportAnimation>,
+    pub triggers: Vec<ImportTrigger>,
+    pub schedules: Vec<ImportSchedule>,
+    pub idle_animation: Option<String>,
+    pub idle_mode: Option<String>,
+}
+
 impl Store {
+    pub fn import_bundle(&self, bundle: &ImportBundle) -> rusqlite::Result<(usize, usize, usize)> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS import_undo_animations;
+             DROP TABLE IF EXISTS import_undo_triggers;
+             DROP TABLE IF EXISTS import_undo_schedules;
+             DROP TABLE IF EXISTS import_undo_settings;
+             CREATE TABLE import_undo_animations AS SELECT * FROM animations;
+             CREATE TABLE import_undo_triggers AS SELECT * FROM triggers;
+             CREATE TABLE import_undo_schedules AS SELECT * FROM schedules;
+             CREATE TABLE import_undo_settings AS SELECT * FROM settings;",
+        )?;
+        for a in &bundle.animations {
+            tx.execute(
+                "INSERT INTO animations(name, spec, builtin, duration_ms) VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT(name) DO UPDATE SET spec=excluded.spec, duration_ms=excluded.duration_ms",
+                params![a.name, serde_json::to_string(&a.spec).unwrap(), a.duration_ms],
+            )?;
+        }
+        let animation_id = |name: &str| -> rusqlite::Result<i64> {
+            tx.query_row(
+                "SELECT id FROM animations WHERE name=?1",
+                params![name],
+                |row| row.get(0),
+            )
+        };
+        let mut trigger_count = 0;
+        for t in &bundle.triggers {
+            let Ok(animation_id) = animation_id(&t.animation) else {
+                continue;
+            };
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM triggers WHERE name=?1 LIMIT 1",
+                    params![t.name],
+                    |row| row.get(0),
+                )
+                .ok();
+            let policy = serde_json::to_string(&t.policy).unwrap_or_else(|_| "{}".into());
+            if let Some(id) = existing {
+                tx.execute("UPDATE triggers SET source=?2,event_type=?3,clear_event_type=?4,animation_id=?5,priority=?6,duration_ms=?7,enabled=?8,policy=?9 WHERE id=?1",
+                    params![id,t.source,t.event_type,t.clear_event_type,animation_id,t.priority,t.duration_ms,t.enabled as i64,policy])?;
+            } else {
+                tx.execute("INSERT INTO triggers(name,source,event_type,clear_event_type,animation_id,priority,duration_ms,enabled,policy) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    params![t.name,t.source,t.event_type,t.clear_event_type,animation_id,t.priority,t.duration_ms,t.enabled as i64,policy])?;
+            }
+            trigger_count += 1;
+        }
+        for s in &bundle.schedules {
+            let animation_id = s
+                .animation
+                .as_deref()
+                .and_then(|name| animation_id(name).ok());
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM schedules WHERE name=?1 LIMIT 1",
+                    params![s.name],
+                    |row| row.get(0),
+                )
+                .ok();
+            if let Some(id) = existing {
+                tx.execute("UPDATE schedules SET time=?2,action=?3,event_type=?4,animation_id=?5,enabled=?6 WHERE id=?1",
+                    params![id,s.time,s.action,s.event_type,animation_id,s.enabled as i64])?;
+            } else {
+                tx.execute("INSERT INTO schedules(name,time,action,event_type,animation_id,enabled) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![s.name,s.time,s.action,s.event_type,animation_id,s.enabled as i64])?;
+            }
+        }
+        if let Some(name) = &bundle.idle_animation {
+            if let Ok(id) = animation_id(name) {
+                tx.execute("INSERT INTO settings(key,value) VALUES ('idle_animation_id',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![id.to_string()])?;
+            }
+        }
+        if let Some(mode) = bundle
+            .idle_mode
+            .as_deref()
+            .filter(|m| *m == "animation" || *m == "claude_usage")
+        {
+            tx.execute("INSERT INTO settings(key,value) VALUES ('idle_mode',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![mode])?;
+        }
+        tx.commit()?;
+        Ok((
+            bundle.animations.len(),
+            trigger_count,
+            bundle.schedules.len(),
+        ))
+    }
+
+    pub fn can_undo_import(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_undo_animations'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
+    pub fn undo_import(&self) -> rusqlite::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM triggers;
+             DELETE FROM schedules;
+             DELETE FROM animations;
+             DELETE FROM settings;
+             INSERT INTO animations SELECT * FROM import_undo_animations;
+             INSERT INTO triggers SELECT * FROM import_undo_triggers;
+             INSERT INTO schedules SELECT * FROM import_undo_schedules;
+             INSERT INTO settings SELECT * FROM import_undo_settings;
+             DROP TABLE import_undo_animations;
+             DROP TABLE import_undo_triggers;
+             DROP TABLE import_undo_schedules;
+             DROP TABLE import_undo_settings;",
+        )?;
+        tx.commit()
+    }
+
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         migrate_legacy_names(&conn)?;

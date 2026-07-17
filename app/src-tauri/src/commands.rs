@@ -607,84 +607,67 @@ pub fn import_config(state: State<AppState>, path: String) -> Result<String, Str
         }
     }
 
-    for a in &file.animations {
-        state
-            .store
-            .save_animation(&a.name, &a.spec, false, a.duration_ms)
-            .map_err(|e| e.to_string())?;
-    }
-    let animations = state.store.list_animations();
-    let id_of = |name: &str| animations.iter().find(|a| a.name == name).map(|a| a.id);
-
-    let existing_triggers = state.store.list_triggers();
-    let mut trigger_count = 0;
-    for t in &file.triggers {
-        let Some(animation_id) = id_of(&t.animation) else {
-            continue;
-        };
-        let id = existing_triggers
+    let bundle = crate::store::ImportBundle {
+        animations: file
+            .animations
             .iter()
-            .find(|e| e.name == t.name)
-            .map(|e| e.id)
-            .unwrap_or(0);
-        state
-            .store
-            .save_trigger(&Trigger {
-                id,
+            .map(|a| crate::store::ImportAnimation {
+                name: a.name.clone(),
+                spec: a.spec.clone(),
+                duration_ms: a.duration_ms,
+            })
+            .collect(),
+        triggers: file
+            .triggers
+            .iter()
+            .map(|t| crate::store::ImportTrigger {
                 name: t.name.clone(),
                 source: t.source.clone(),
                 event_type: t.event_type.clone(),
                 clear_event_type: t.clear_event_type.clone(),
-                animation_id,
+                animation: t.animation.clone(),
                 priority: t.priority,
                 duration_ms: t.duration_ms,
                 enabled: t.enabled,
                 policy: t.policy.clone(),
             })
-            .map_err(|e| e.to_string())?;
-        trigger_count += 1;
-    }
-
-    let existing_schedules = state.store.list_schedules();
-    for s in &file.schedules {
-        let id = existing_schedules
+            .collect(),
+        schedules: file
+            .schedules
             .iter()
-            .find(|e| e.name == s.name)
-            .map(|e| e.id)
-            .unwrap_or(0);
-        state
-            .store
-            .save_schedule(&Schedule {
-                id,
+            .map(|s| crate::store::ImportSchedule {
                 name: s.name.clone(),
                 time: s.time.clone(),
                 action: s.action.clone(),
                 event_type: s.event_type.clone(),
-                animation_id: s.animation.as_deref().and_then(id_of),
+                animation: s.animation.clone(),
                 enabled: s.enabled,
             })
-            .map_err(|e| e.to_string())?;
-    }
-
-    if let Some(idle_id) = file.idle_animation.as_deref().and_then(id_of) {
-        state
-            .store
-            .set_setting("idle_animation_id", &idle_id.to_string());
-    }
-    if let Some(mode) = file
-        .idle_mode
-        .as_deref()
-        .filter(|m| *m == "animation" || *m == "claude_usage")
-    {
-        state.store.set_setting("idle_mode", mode);
-    }
+            .collect(),
+        idle_animation: file.idle_animation.clone(),
+        idle_mode: file.idle_mode.clone(),
+    };
+    let (animation_count, trigger_count, schedule_count) = state
+        .store
+        .import_bundle(&bundle)
+        .map_err(|e| e.to_string())?;
     state.triggers.sync_with_store();
     Ok(format!(
         "Imported {} animations, {} triggers, {} schedules",
-        file.animations.len(),
-        trigger_count,
-        file.schedules.len()
+        animation_count, trigger_count, schedule_count
     ))
+}
+
+#[tauri::command]
+pub fn can_undo_import(state: State<AppState>) -> bool {
+    state.store.can_undo_import()
+}
+
+#[tauri::command]
+pub fn undo_import(state: State<AppState>) -> Result<(), String> {
+    state.store.undo_import().map_err(|e| e.to_string())?;
+    state.triggers.sync_with_store();
+    Ok(())
 }
 
 /// Store (or, with an empty value, delete) an integration secret in the OS

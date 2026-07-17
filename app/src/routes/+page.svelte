@@ -91,6 +91,7 @@
   // --- integrations (secrets live in the OS keychain, never the DB) ---
   let slackSet = $state(false);
   let calendarSet = $state(false);
+  let canUndoImport = $state(false);
   let slackInput = $state("");
   let calendarInput = $state("");
   async function saveSecret(name: string, value: string) {
@@ -376,6 +377,7 @@
     try {
       const summary: string = await invoke("import_config", { path });
       notify(summary);
+      canUndoImport = true;
     } catch (e) {
       reportError(e);
       return;
@@ -384,6 +386,15 @@
     triggers = await invoke("list_triggers");
     schedules = await invoke("list_schedules");
     await loadIdle();
+  }
+  async function undoImport() {
+    try {
+      await invoke("undo_import");
+      canUndoImport = false;
+      animations = await invoke("list_animations"); triggers = await invoke("list_triggers"); schedules = await invoke("list_schedules");
+      await loadIdle();
+      notify("Import undone");
+    } catch (e) { reportError(e); }
   }
   async function exportDiagnostics() {
     const path = await saveDialog({ defaultPath: "luminode-diagnostics.json", filters: [{ name: "JSON", extensions: ["json"] }] });
@@ -488,6 +499,7 @@
       slackSet = await invoke("has_secret", { name: "slack_token" });
       calendarSet = await invoke("has_secret", { name: "calendar_ics_url" });
       integrationHealth = await invoke("integration_health");
+      canUndoImport = await invoke("can_undo_import");
       } catch (e) {
         reportError(`Could not load Luminode: ${e}`);
       }
@@ -867,6 +879,7 @@
         <label for="cfg">Config</label>
         <button id="cfg" onclick={exportConfig}>Export…</button>
         <button onclick={importConfig}>Import…</button>
+        {#if canUndoImport}<button onclick={undoImport}>Undo last import</button>{/if}
         <button onclick={exportDiagnostics}>Diagnostics…</button>
         <small>animations, triggers, schedules & idle — as JSON, by name</small>
       </div>
