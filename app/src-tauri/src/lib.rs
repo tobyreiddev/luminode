@@ -184,6 +184,7 @@ pub fn run() {
             commands::save_schedule,
             commands::delete_schedule,
             commands::export_config,
+            commands::export_diagnostics,
             commands::import_config,
             commands::recent_events,
             commands::clear_events,

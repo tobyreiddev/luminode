@@ -37,7 +37,7 @@
   }
 
   // --- live state pushed from Rust ---
-  let status = $state<DeviceStatus>({ connected: false, port: null, serialNumber: null, fwVersion: null, ledCount: null });
+  let status = $state<DeviceStatus>({ connected: false, port: null, serialNumber: null, fwVersion: null, ledCount: null, protocolVersion: null });
   let candidates = $state<PortCandidate[]>([]);
   let frame = $state<string>("000000".repeat(NUM_LEDS));
   let active = $state<ActiveState>({ activeName: "…", snoozedUntilMs: null, overlays: [] });
@@ -354,6 +354,16 @@
     schedules = await invoke("list_schedules");
     await loadIdle();
   }
+  async function exportDiagnostics() {
+    const path = await saveDialog({ defaultPath: "luminode-diagnostics.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+    if (!path) return;
+    try {
+      await invoke("export_diagnostics", { path });
+      notify("Redacted diagnostics exported");
+    } catch (e) {
+      reportError(e);
+    }
+  }
 
   // -- device / misc --
   async function adopt(port: string) {
@@ -459,7 +469,7 @@
     </div>
     <div class="statusbar">
       <span class="pill {status.connected ? 'ok' : 'bad'}">
-        {status.connected ? `Connected · ${status.port} · fw ${status.fwVersion} · ${status.ledCount} LEDs` : "Disconnected — searching…"}
+        {status.connected ? `Connected · ${status.port} · fw ${status.fwVersion} · protocol ${status.protocolVersion} · ${status.ledCount} LEDs` : "Disconnected — searching…"}
       </span>
       <span class="pill">Now showing: <strong>{active.activeName}</strong></span>
       {#if active.snoozedUntilMs}
@@ -803,6 +813,7 @@
         <label for="cfg">Config</label>
         <button id="cfg" onclick={exportConfig}>Export…</button>
         <button onclick={importConfig}>Import…</button>
+        <button onclick={exportDiagnostics}>Diagnostics…</button>
         <small>animations, triggers, schedules & idle — as JSON, by name</small>
       </div>
 

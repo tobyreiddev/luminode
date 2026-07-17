@@ -73,6 +73,7 @@ pub struct DeviceStatus {
     pub serial_number: Option<String>,
     pub fw_version: Option<String>,
     pub led_count: Option<u32>,
+    pub protocol_version: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -634,6 +635,7 @@ fn adopt(
         .and_then(|cand| cand.serial_number.clone());
     let fw = pong["fw"].as_str().unwrap_or("unknown").to_string();
     let led_count = pong["leds"].as_u64().unwrap_or(0) as u32;
+    let proto = pong["proto"].as_u64().unwrap_or(1).min(u8::MAX as u64) as u8;
 
     ctx.store
         .save_device_identity(serial_number.as_deref(), &c.port_name, led_count, &fw);
@@ -645,12 +647,12 @@ fn adopt(
         status.serial_number = serial_number;
         status.fw_version = Some(fw);
         status.led_count = Some(led_count);
+        status.protocol_version = Some(proto);
     }
     *conn = Some(c);
 
     // Publish the protocol version first: the engine reads it after seeing
     // the epoch change, and it gates native-effect vs frame-stream sending.
-    let proto = pong["proto"].as_u64().unwrap_or(1).min(u8::MAX as u64) as u8;
     ctx.engine
         .device_proto
         .store(proto, std::sync::atomic::Ordering::Relaxed);
@@ -683,6 +685,7 @@ fn disconnect(ctx: &DeviceCtx, conn: &mut Option<Connection>, reason: &str) {
         status.connected = false;
         status.port = None;
         status.fw_version = None;
+        status.protocol_version = None;
     }
     emit_status(ctx);
     let _ = ctx.bus.send(Event::new(

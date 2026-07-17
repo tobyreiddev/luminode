@@ -422,6 +422,38 @@ pub fn export_config(state: State<AppState>, path: String) -> Result<(), String>
 }
 
 #[tauri::command]
+pub fn export_diagnostics(state: State<AppState>, path: String) -> Result<(), String> {
+    let status = state
+        .device_status
+        .lock()
+        .map_err(|_| "device status unavailable")?
+        .clone();
+    let diagnostics = serde_json::json!({
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "platform": std::env::consts::OS,
+        "architecture": std::env::consts::ARCH,
+        "device": {
+            "connected": status.connected,
+            "firmwareVersion": status.fw_version,
+            "protocolVersion": status.protocol_version,
+            "ledCount": status.led_count
+        },
+        "counts": {
+            "animations": state.store.list_animations().len(),
+            "triggers": state.store.list_triggers().len(),
+            "schedules": state.store.list_schedules().len()
+        },
+        "recentEvents": state.store.recent_events(100).into_iter().map(|event| serde_json::json!({
+            "source": event.source,
+            "type": event.event_type,
+            "ts": event.ts
+        })).collect::<Vec<_>>()
+    });
+    let json = serde_json::to_string_pretty(&diagnostics).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn import_config(state: State<AppState>, path: String) -> Result<String, String> {
     const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
     if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_CONFIG_BYTES {

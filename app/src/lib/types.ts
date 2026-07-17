@@ -19,6 +19,7 @@ export interface DeviceStatus {
   serialNumber: string | null;
   fwVersion: string | null;
   ledCount: number | null;
+  protocolVersion: number | null;
 }
 
 export interface PortCandidate {
