@@ -395,3 +395,37 @@ fn usage_color(fraction: f32) -> [u8; 3] {
         crate::animation::lerp(AMBER, RED, (f - 0.6) / 0.4)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::TriggerPolicy;
+
+    #[test]
+    fn payload_conditions_support_dot_and_pointer_paths() {
+        let event = Event::new(
+            "test",
+            "event",
+            serde_json::json!({"build": {"status": "failed"}}),
+        );
+        for path in ["build.status", "/build/status"] {
+            let policy = TriggerPolicy {
+                payload_path: Some(path.into()),
+                payload_equals: Some(serde_json::json!("failed")),
+                ..TriggerPolicy::default()
+            };
+            assert!(payload_matches(&event, &policy));
+        }
+    }
+
+    #[test]
+    fn payload_condition_rejects_a_different_value() {
+        let event = Event::new("test", "event", serde_json::json!({"percent": 50}));
+        let policy = TriggerPolicy {
+            payload_path: Some("percent".into()),
+            payload_equals: Some(serde_json::json!(100)),
+            ..TriggerPolicy::default()
+        };
+        assert!(!payload_matches(&event, &policy));
+    }
+}

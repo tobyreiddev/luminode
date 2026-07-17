@@ -1183,4 +1183,28 @@ mod tests {
         store.delete_animation(id).unwrap();
         assert!(store.list_triggers().iter().all(|t| t.animation_id != id));
     }
+
+    #[test]
+    fn import_is_undoable() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        store
+            .import_bundle(&ImportBundle {
+                animations: vec![ImportAnimation {
+                    name: "Imported".into(),
+                    spec: AnimSpec::default(),
+                    duration_ms: None,
+                }],
+                triggers: vec![],
+                schedules: vec![],
+                idle_animation: None,
+                idle_mode: None,
+            })
+            .unwrap();
+        assert!(store.list_animations().iter().any(|a| a.name == "Imported"));
+        assert!(store.can_undo_import());
+        store.undo_import().unwrap();
+        assert!(store.list_animations().iter().all(|a| a.name != "Imported"));
+        assert!(!store.can_undo_import());
+    }
 }
