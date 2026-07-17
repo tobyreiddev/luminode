@@ -54,6 +54,36 @@ pub struct Trigger {
     /// Auto-expire after this long; refreshed each time the trigger re-fires.
     pub duration_ms: Option<i64>,
     pub enabled: bool,
+    #[serde(default)]
+    pub policy: TriggerPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerPolicy {
+    #[serde(default = "default_profile")]
+    pub profile: String,
+    #[serde(default)]
+    pub payload_path: Option<String>,
+    #[serde(default)]
+    pub payload_equals: Option<serde_json::Value>,
+    #[serde(default)]
+    pub cooldown_ms: Option<i64>,
+}
+
+impl Default for TriggerPolicy {
+    fn default() -> Self {
+        Self {
+            profile: default_profile(),
+            payload_path: None,
+            payload_equals: None,
+            cooldown_ms: None,
+        }
+    }
+}
+
+fn default_profile() -> String {
+    "Default".into()
 }
 
 /// A clock-driven action, checked once a minute (`sources/schedule.rs`):
@@ -82,6 +112,7 @@ impl Store {
         // Additive column migrations (no-ops on fresh DBs, which get the
         // column from CREATE TABLE below — ALTER first so old DBs catch up).
         add_column_if_missing(&conn, "animations", "duration_ms", "INTEGER");
+        add_column_if_missing(&conn, "triggers", "policy", "TEXT NOT NULL DEFAULT '{}'");
         conn.execute_batch(
             "
             PRAGMA foreign_keys = ON;
@@ -125,6 +156,7 @@ impl Store {
                 priority         INTEGER NOT NULL DEFAULT 10,
                 duration_ms      INTEGER,
                 enabled          INTEGER NOT NULL DEFAULT 1
+                ,policy          TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS event_log (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,6 +285,7 @@ impl Store {
                 priority: 70,
                 duration_ms: Some(120_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             },
             Trigger {
                 id: 0,
@@ -264,6 +297,7 @@ impl Store {
                 priority: 90,
                 duration_ms: Some(4_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             },
             Trigger {
                 id: 0,
@@ -275,6 +309,7 @@ impl Store {
                 priority: 95,
                 duration_ms: Some(6_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             },
             Trigger {
                 id: 0,
@@ -286,6 +321,7 @@ impl Store {
                 priority: 80,
                 duration_ms: None,
                 enabled: true,
+                policy: TriggerPolicy::default(),
             },
         ];
         for trigger in triggers {
@@ -346,6 +382,7 @@ impl Store {
                 priority: 85,
                 duration_ms: Some(4_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             });
         }
         if let Ok(id) = working {
@@ -361,6 +398,7 @@ impl Store {
                 // don't glow clay forever.
                 duration_ms: Some(30 * 60_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             });
         }
         if let Ok(id) = usage {
@@ -376,6 +414,7 @@ impl Store {
                 priority: 50,
                 duration_ms: Some(15_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             });
         }
         for trigger in triggers {
@@ -417,6 +456,7 @@ impl Store {
                 priority: 61,
                 duration_ms: Some(30 * 60_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             });
         }
         if let Some(animation_id) = done_id {
@@ -430,6 +470,7 @@ impl Store {
                 priority: 86,
                 duration_ms: Some(4_000),
                 enabled: true,
+                policy: TriggerPolicy::default(),
             });
         }
         self.set_setting("seeded_codex", "1");
@@ -472,6 +513,7 @@ impl Store {
                     priority,
                     duration_ms: None,
                     enabled: true,
+                    policy: TriggerPolicy::default(),
                 });
             }
         }
@@ -495,6 +537,7 @@ impl Store {
                 priority: 82,
                 duration_ms: None,
                 enabled: true,
+                policy: TriggerPolicy::default(),
             });
         }
         self.set_setting("seeded_display", "1");
@@ -667,7 +710,7 @@ impl Store {
         let conn = self.0.lock().unwrap();
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, name, source, event_type, clear_event_type, animation_id,
-                    priority, duration_ms, enabled
+                    priority, duration_ms, enabled, policy
              FROM triggers ORDER BY priority DESC, name",
         ) else {
             return Vec::new();
@@ -683,6 +726,11 @@ impl Store {
                 priority: row.get(6)?,
                 duration_ms: row.get(7)?,
                 enabled: row.get::<_, i64>(8)? != 0,
+                policy: row
+                    .get::<_, String>(9)
+                    .ok()
+                    .and_then(|v| serde_json::from_str(&v).ok())
+                    .unwrap_or_default(),
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -695,8 +743,8 @@ impl Store {
         if trigger.id == 0 {
             conn.execute(
                 "INSERT INTO triggers(name, source, event_type, clear_event_type,
-                                      animation_id, priority, duration_ms, enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                      animation_id, priority, duration_ms, enabled, policy)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     trigger.name,
                     trigger.source,
@@ -705,7 +753,8 @@ impl Store {
                     trigger.animation_id,
                     trigger.priority,
                     trigger.duration_ms,
-                    trigger.enabled as i64
+                    trigger.enabled as i64,
+                    serde_json::to_string(&trigger.policy).unwrap_or_else(|_| "{}".into())
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -713,7 +762,7 @@ impl Store {
             conn.execute(
                 "UPDATE triggers SET name = ?2, source = ?3, event_type = ?4,
                                      clear_event_type = ?5, animation_id = ?6,
-                                     priority = ?7, duration_ms = ?8, enabled = ?9
+                                     priority = ?7, duration_ms = ?8, enabled = ?9, policy = ?10
                  WHERE id = ?1",
                 params![
                     trigger.id,
@@ -724,7 +773,8 @@ impl Store {
                     trigger.animation_id,
                     trigger.priority,
                     trigger.duration_ms,
-                    trigger.enabled as i64
+                    trigger.enabled as i64,
+                    serde_json::to_string(&trigger.policy).unwrap_or_else(|_| "{}".into())
                 ],
             )?;
             Ok(trigger.id)
@@ -932,6 +982,7 @@ mod tests {
                 priority: 1,
                 duration_ms: None,
                 enabled: true,
+                policy: TriggerPolicy::default(),
             })
             .unwrap();
         store.delete_animation(id).unwrap();

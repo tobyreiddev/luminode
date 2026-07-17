@@ -17,6 +17,7 @@
 //! it beat.
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -53,6 +54,7 @@ pub struct ActiveState {
     pub active_name: String,
     pub snoozed_until_ms: Option<i64>,
     pub overlays: Vec<OverlayInfo>,
+    pub quiet_hours_active: bool,
 }
 
 pub struct TriggerEngine {
@@ -70,6 +72,7 @@ pub struct TriggerEngine {
 struct Inner {
     overlays: Vec<Overlay>,
     snooze_until: Option<Instant>,
+    last_fired: HashMap<i64, Instant>,
 }
 
 impl TriggerEngine {
@@ -78,6 +81,7 @@ impl TriggerEngine {
             inner: Mutex::new(Inner {
                 overlays: Vec::new(),
                 snooze_until: None,
+                last_fired: HashMap::new(),
             }),
             store,
             engine,
@@ -104,6 +108,10 @@ impl TriggerEngine {
         }
 
         let triggers = self.store.list_triggers();
+        let active_profile = self
+            .store
+            .setting("active_profile")
+            .unwrap_or_else(|| "Default".into());
         let mut inner = self.inner.lock().unwrap();
 
         for trigger in triggers
@@ -117,6 +125,23 @@ impl TriggerEngine {
                     .retain(|o| o.key != format!("trigger:{}", trigger.id));
             }
             if trigger.event_type != ev.event_type {
+                continue;
+            }
+            if quiet_hours_active(&self.store) {
+                continue;
+            }
+            if trigger.policy.profile != "*" && trigger.policy.profile != active_profile {
+                continue;
+            }
+            if !payload_matches(ev, &trigger.policy) {
+                continue;
+            }
+            if trigger.policy.cooldown_ms.is_some_and(|ms| {
+                inner
+                    .last_fired
+                    .get(&trigger.id)
+                    .is_some_and(|last| last.elapsed() < Duration::from_millis(ms.max(0) as u64))
+            }) {
                 continue;
             }
             let Some(animation) = self.store.animation(trigger.animation_id) else {
@@ -155,6 +180,7 @@ impl TriggerEngine {
             // Re-fire replaces (refreshing expiry) instead of stacking.
             inner.overlays.retain(|o| o.key != overlay.key);
             inner.overlays.push(overlay);
+            inner.last_fired.insert(trigger.id, Instant::now());
         }
         drop(inner);
         self.recompute();
@@ -202,6 +228,10 @@ impl TriggerEngine {
     /// Without this, toggling a trigger off leaves its light on until expiry.
     pub fn sync_with_store(&self) {
         let triggers = self.store.list_triggers();
+        let active_profile = self
+            .store
+            .setting("active_profile")
+            .unwrap_or_else(|| "Default".into());
         let mut inner = self.inner.lock().unwrap();
         inner.overlays.retain_mut(|o| {
             let Some(id) = o
@@ -212,7 +242,10 @@ impl TriggerEngine {
                 return true; // "manual" is not the store's to reconcile
             };
             match triggers.iter().find(|t| t.id == id) {
-                Some(t) if t.enabled => {
+                Some(t)
+                    if t.enabled
+                        && (t.policy.profile == "*" || t.policy.profile == active_profile) =>
+                {
                     o.priority = t.priority;
                     o.name = t.name.clone();
                     true
@@ -269,9 +302,13 @@ impl TriggerEngine {
 
         let snoozed = inner.snooze_until.is_some();
         let winner = inner.overlays.iter().max_by_key(|o| o.priority).cloned();
+        let quiet = quiet_hours_active(&self.store);
+        let manual_wins = winner.as_ref().is_some_and(|o| o.key == "manual");
 
         let (active_name, spec) = if snoozed {
             ("Snoozed".to_string(), AnimSpec::off())
+        } else if quiet && !manual_wins {
+            ("Quiet hours".to_string(), AnimSpec::off())
         } else {
             match &winner {
                 Some(o) => (o.name.clone(), o.spec.clone()),
@@ -297,6 +334,7 @@ impl TriggerEngine {
                     winning: !snoozed && winner.as_ref().map(|w| w.key == o.key).unwrap_or(false),
                 })
                 .collect(),
+            quiet_hours_active: quiet,
         };
         drop(inner);
 
@@ -308,6 +346,40 @@ impl TriggerEngine {
     pub fn active_state_snapshot(&self) -> ActiveState {
         self.recompute()
     }
+}
+
+fn quiet_hours_active(store: &Store) -> bool {
+    if store.setting("quiet_enabled").as_deref() != Some("true") {
+        return false;
+    }
+    let start = store
+        .setting("quiet_start")
+        .unwrap_or_else(|| "22:00".into());
+    let end = store.setting("quiet_end").unwrap_or_else(|| "07:00".into());
+    let now = chrono::Local::now().format("%H:%M").to_string();
+    if start <= end {
+        now >= start && now < end
+    } else {
+        now >= start || now < end
+    }
+}
+
+fn payload_matches(ev: &Event, policy: &crate::store::TriggerPolicy) -> bool {
+    let (Some(path), Some(expected)) = (&policy.payload_path, &policy.payload_equals) else {
+        return true;
+    };
+    let pointer = if path.starts_with('/') {
+        path.clone()
+    } else {
+        format!(
+            "/{}",
+            path.split('.')
+                .map(|part| part.replace('~', "~0").replace('/', "~1"))
+                .collect::<Vec<_>>()
+                .join("/")
+        )
+    };
+    ev.payload.pointer(&pointer) == Some(expected)
 }
 
 /// Bar color for a usage fraction: green while comfortable, amber past 60%,

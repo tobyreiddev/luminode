@@ -60,6 +60,12 @@ export interface Trigger {
   priority: number;
   durationMs: number | null;
   enabled: boolean;
+  policy: {
+    profile: string;
+    payloadPath: string | null;
+    payloadEquals: unknown | null;
+    cooldownMs: number | null;
+  };
 }
 
 export interface BusEvent {
@@ -89,6 +95,7 @@ export interface ActiveState {
   activeName: string;
   snoozedUntilMs: number | null;
   overlays: OverlayInfo[];
+  quietHoursActive: boolean;
 }
 
 export function rgbToHex([r, g, b]: [number, number, number]): string {

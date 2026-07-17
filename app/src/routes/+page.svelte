@@ -41,13 +41,19 @@
   let status = $state<DeviceStatus>({ connected: false, port: null, serialNumber: null, fwVersion: null, ledCount: null, protocolVersion: null });
   let candidates = $state<PortCandidate[]>([]);
   let frame = $state<string>("000000".repeat(NUM_LEDS));
-  let active = $state<ActiveState>({ activeName: "…", snoozedUntilMs: null, overlays: [] });
+  let active = $state<ActiveState>({ activeName: "…", snoozedUntilMs: null, overlays: [], quietHoursActive: false });
   let events = $state<BusEvent[]>([]);
   let integrationHealth = $state<IntegrationHealth[]>([]);
 
   // --- persisted collections ---
   let animations = $state<Animation[]>([]);
   let triggers = $state<Trigger[]>([]);
+  let profiles = $state<string[]>(["Default"]);
+  let activeProfile = $state("Default");
+  let quietEnabled = $state(false);
+  let quietStart = $state("22:00");
+  let quietEnd = $state("07:00");
+  let conditionValue = $state("");
   let schedules = $state<Schedule[]>([]);
   // Animation id, or "claude_usage" for the live session/weekly gauge.
   let idleSelection = $state<number | "claude_usage" | null>(null);
@@ -243,6 +249,7 @@
       priority: (triggers[0]?.priority ?? 0) + 10,
       durationMs: null,
       enabled: true,
+      policy: { profile: activeProfile, payloadPath: null, payloadEquals: null, cooldownMs: null },
     };
   }
   async function saveTrigger() {
@@ -250,10 +257,31 @@
     const trigger = {
       ...editingTrigger,
       clearEventType: editingTrigger.clearEventType?.trim() || null,
+      policy: {
+        ...editingTrigger.policy,
+        payloadPath: editingTrigger.policy.payloadPath?.trim() || null,
+        payloadEquals: editingTrigger.policy.payloadPath ? parseConditionValue(conditionValue) : null,
+      },
     };
     await invoke("save_trigger", { trigger });
     editingTrigger = null;
     triggers = await invoke("list_triggers");
+    profiles = await invoke("list_profiles");
+  }
+  function parseConditionValue(value: string): unknown {
+    if (!value.trim()) return "";
+    try { return JSON.parse(value); } catch { return value; }
+  }
+  async function changeProfile() {
+    await invoke("set_active_profile", { profile: activeProfile });
+    active = await invoke("get_active");
+    notify(`Profile changed to ${activeProfile}`);
+  }
+  async function saveQuietHours() {
+    try {
+      await invoke("set_quiet_hours", { enabled: quietEnabled, start: quietStart, end: quietEnd });
+      notify(quietEnabled ? `Quiet hours saved (${quietStart}–${quietEnd})` : "Quiet hours disabled");
+    } catch (e) { reportError(e); }
   }
   async function toggleTrigger(trigger: Trigger) {
     await invoke("save_trigger", { trigger: { ...trigger, enabled: !trigger.enabled } });
@@ -448,6 +476,10 @@
       candidates = await invoke("list_candidates");
       animations = await invoke("list_animations");
       triggers = await invoke("list_triggers");
+      profiles = await invoke("list_profiles");
+      activeProfile = await invoke("get_active_profile");
+      const quiet = await invoke<{ enabled: boolean; start: string; end: string }>("get_quiet_hours");
+      quietEnabled = quiet.enabled; quietStart = quiet.start; quietEnd = quiet.end;
       schedules = await invoke("list_schedules");
       brightness = await invoke("get_brightness");
       await loadIdle();
@@ -640,6 +672,8 @@
     <!-- ======= triggers ======= -->
     <section class="automations-view">
       <h2>Triggers <button class="subtle" onclick={() => (editingTrigger = newTrigger())}>+ add</button></h2>
+      <div class="field"><label for="profile">Scene</label><input id="profile" list="profiles" bind:value={activeProfile} /><datalist id="profiles">{#each profiles as p}<option value={p}></option>{/each}</datalist><button onclick={changeProfile}>Activate</button></div>
+      <div class="field"><label for="quiet">Quiet hours</label><input id="quiet" type="checkbox" bind:checked={quietEnabled} /><input aria-label="Quiet hours start" type="time" bind:value={quietStart} /><span>to</span><input aria-label="Quiet hours end" type="time" bind:value={quietEnd} /><button onclick={saveQuietHours}>Save</button></div>
       <small class="hint">Drag to reorder — higher wins when several fire at once.</small>
       <ul class="list">
         {#each triggers as t, i (t.id)}
@@ -665,7 +699,7 @@
               <input type="checkbox" checked={t.enabled} onchange={() => toggleTrigger(t)} />
               <span class="slider"></span>
             </label>
-            <button class="subtle" onclick={() => (editingTrigger = { ...t })}>edit</button>
+            <button class="subtle" onclick={() => { editingTrigger = structuredClone(t); conditionValue = t.policy.payloadEquals == null ? "" : JSON.stringify(t.policy.payloadEquals); }}>edit</button>
             <button class="subtle" onclick={() => deleteTrigger(t.id)}>✕</button>
           </li>
         {/each}
@@ -700,6 +734,9 @@
               <option value="device">the strip's connection</option>
             </datalist>
           </div>
+          <div class="field"><label for="tp">Scene</label><input id="tp" list="profiles" bind:value={editingTrigger.policy.profile} /><small>Use * for every scene</small></div>
+          <div class="field"><label for="tpath">Payload condition</label><input id="tpath" placeholder="status or user.name" bind:value={editingTrigger.policy.payloadPath} /><input placeholder="expected JSON/value" bind:value={conditionValue} /></div>
+          <div class="field"><label for="tcool">Cooldown (s)</label><input id="tcool" type="number" min="0" value={editingTrigger.policy.cooldownMs != null ? editingTrigger.policy.cooldownMs / 1000 : ""} onchange={(e) => { const v = (e.target as HTMLInputElement).value; editingTrigger!.policy.cooldownMs = v ? Math.round(Number(v) * 1000) : null; }} /></div>
           <div class="field">
             <label for="tc">Clear on</label>
             <input id="tc" placeholder="event type (optional)" bind:value={editingTrigger.clearEventType} />

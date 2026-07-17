@@ -8,7 +8,7 @@ use tauri::State;
 use crate::animation::AnimSpec;
 use crate::device::{DeviceMsg, DeviceStatus, PortCandidate};
 use crate::events::Event;
-use crate::store::{Animation, Schedule, Trigger};
+use crate::store::{Animation, Schedule, Trigger, TriggerPolicy};
 use crate::triggers::ActiveState;
 use crate::AppState;
 
@@ -54,12 +54,101 @@ fn validate_trigger_input(state: &AppState, trigger: &Trigger) -> Result<(), Str
         validate_text(clear, "clear event type", MAX_EVENT_LEN)?;
     }
     validate_duration(trigger.duration_ms, "trigger duration")?;
+    validate_text(&trigger.policy.profile, "profile", MAX_NAME_LEN)?;
+    if let Some(path) = trigger.policy.payload_path.as_deref() {
+        validate_text(path, "payload path", 200)?;
+        if trigger.policy.payload_equals.is_none() {
+            return Err("payload conditions need an expected value".into());
+        }
+    }
+    validate_duration(trigger.policy.cooldown_ms, "trigger cooldown")?;
     if !(-10_000..=10_000).contains(&trigger.priority) {
         return Err("trigger priority is outside the supported range".into());
     }
     if state.store.animation(trigger.animation_id).is_none() {
         return Err("trigger references an unknown animation".into());
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_profiles(state: State<AppState>) -> Vec<String> {
+    let mut profiles = vec!["Default".to_string()];
+    profiles.extend(
+        state
+            .store
+            .list_triggers()
+            .into_iter()
+            .map(|t| t.policy.profile)
+            .filter(|p| p != "*"),
+    );
+    profiles.sort();
+    profiles.dedup();
+    profiles
+}
+
+#[tauri::command]
+pub fn get_active_profile(state: State<AppState>) -> String {
+    state
+        .store
+        .setting("active_profile")
+        .unwrap_or_else(|| "Default".into())
+}
+
+#[tauri::command]
+pub fn set_active_profile(state: State<AppState>, profile: String) -> Result<(), String> {
+    validate_text(&profile, "profile", MAX_NAME_LEN)?;
+    state.store.set_setting("active_profile", &profile);
+    state.triggers.sync_with_store();
+    Ok(())
+}
+
+fn valid_clock(value: &str) -> bool {
+    value.len() == 5
+        && value.as_bytes().get(2) == Some(&b':')
+        && value[0..2].parse::<u8>().is_ok_and(|h| h < 24)
+        && value[3..5].parse::<u8>().is_ok_and(|m| m < 60)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuietHours {
+    enabled: bool,
+    start: String,
+    end: String,
+}
+
+#[tauri::command]
+pub fn get_quiet_hours(state: State<AppState>) -> QuietHours {
+    QuietHours {
+        enabled: state.store.setting("quiet_enabled").as_deref() == Some("true"),
+        start: state
+            .store
+            .setting("quiet_start")
+            .unwrap_or_else(|| "22:00".into()),
+        end: state
+            .store
+            .setting("quiet_end")
+            .unwrap_or_else(|| "07:00".into()),
+    }
+}
+
+#[tauri::command]
+pub fn set_quiet_hours(
+    state: State<AppState>,
+    enabled: bool,
+    start: String,
+    end: String,
+) -> Result<(), String> {
+    if !valid_clock(&start) || !valid_clock(&end) {
+        return Err("quiet hours must use valid HH:MM times".into());
+    }
+    state
+        .store
+        .set_setting("quiet_enabled", if enabled { "true" } else { "false" });
+    state.store.set_setting("quiet_start", &start);
+    state.store.set_setting("quiet_end", &end);
+    state.triggers.recompute();
     Ok(())
 }
 
@@ -347,6 +436,8 @@ struct ConfigTrigger {
     priority: i32,
     duration_ms: Option<i64>,
     enabled: bool,
+    #[serde(default)]
+    policy: TriggerPolicy,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -394,6 +485,7 @@ pub fn export_config(state: State<AppState>, path: String) -> Result<(), String>
                     priority: t.priority,
                     duration_ms: t.duration_ms,
                     enabled: t.enabled,
+                    policy: t.policy.clone(),
                 })
             })
             .collect(),
@@ -547,6 +639,7 @@ pub fn import_config(state: State<AppState>, path: String) -> Result<String, Str
                 priority: t.priority,
                 duration_ms: t.duration_ms,
                 enabled: t.enabled,
+                policy: t.policy.clone(),
             })
             .map_err(|e| e.to_string())?;
         trigger_count += 1;
