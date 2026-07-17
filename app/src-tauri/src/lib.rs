@@ -14,6 +14,7 @@ mod animation;
 mod commands;
 mod device;
 mod events;
+mod health;
 mod secrets;
 mod sources;
 mod store;
@@ -40,6 +41,7 @@ pub struct AppState {
     pub triggers: Arc<TriggerEngine>,
     pub device_status: Arc<Mutex<DeviceStatus>>,
     pub candidates: Arc<Mutex<Vec<PortCandidate>>>,
+    pub health: health::HealthRegistry,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -67,6 +69,7 @@ pub fn run() {
             let engine = Arc::new(EngineShared::new(initial_brightness));
             let device_status = Arc::new(Mutex::new(DeviceStatus::default()));
             let candidates = Arc::new(Mutex::new(Vec::new()));
+            let health = health::HealthRegistry::default();
 
             // Frames are droppable, so the channel stays small on purpose —
             // backpressure means "skip frames", never "stall the engine".
@@ -99,8 +102,8 @@ pub fn run() {
             sources::schedule::spawn(store.clone(), bus.clone(), trigger_engine.clone());
             // Poll-loop sources idle until their keychain secret exists, so
             // spawning unconditionally is free.
-            sources::slack::spawn(bus.clone());
-            sources::calendar::spawn(bus.clone());
+            sources::slack::spawn(bus.clone(), health.clone());
+            sources::calendar::spawn(bus.clone(), health.clone());
 
             // Bus subscriber: feed the trigger engine, the event log, and
             // the UI's live feed from every event.
@@ -146,6 +149,7 @@ pub fn run() {
                 triggers: trigger_engine.clone(),
                 device_status,
                 candidates,
+                health,
             });
 
             setup_tray(app, trigger_engine)?;
@@ -193,6 +197,7 @@ pub fn run() {
             commands::simulate_event,
             commands::set_secret,
             commands::has_secret,
+            commands::integration_health,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

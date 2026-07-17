@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::events::{Bus, Event};
 use crate::secrets;
 
-pub fn spawn(bus: Bus) {
+pub fn spawn(bus: Bus, health: crate::health::HealthRegistry) {
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -32,10 +32,13 @@ pub fn spawn(bus: Bus) {
         loop {
             interval.tick().await;
             let Some(token) = secrets::get("slack_token") else {
+                health.idle("slack", "Add a Slack token to connect");
                 continue;
             };
 
-            if let Some(v) = api(&client, &token, "users.profile.get").await {
+            let profile_result = api(&client, &token, "users.profile.get").await;
+            if let Some(v) = profile_result {
+                health.success("slack");
                 let profile = v.get("profile").cloned().unwrap_or_default();
                 let text = str_field(&profile, "status_text");
                 let emoji = str_field(&profile, "status_emoji");
@@ -56,6 +59,8 @@ pub fn spawn(bus: Bus) {
                     }
                     last_status = Some(current);
                 }
+            } else {
+                health.failure("slack", "Slack API request failed");
             }
 
             if let Some(v) = api(&client, &token, "users.getPresence").await {

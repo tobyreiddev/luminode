@@ -606,6 +606,11 @@ pub fn has_secret(name: String) -> bool {
     crate::secrets::get(&name).is_some()
 }
 
+#[tauri::command]
+pub fn integration_health(state: State<AppState>) -> Vec<crate::health::IntegrationHealth> {
+    state.health.snapshot()
+}
+
 /// Inject a synthetic event — lets users test triggers from the UI without
 /// wiring up a real integration first.
 #[tauri::command]

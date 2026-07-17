@@ -69,6 +69,14 @@ export interface BusEvent {
   ts: number;
 }
 
+export interface IntegrationHealth {
+  source: string;
+  status: "healthy" | "error" | "not_configured";
+  message: string | null;
+  lastAttemptMs: number | null;
+  lastSuccessMs: number | null;
+}
+
 export interface OverlayInfo {
   key: string;
   name: string;

@@ -25,7 +25,7 @@ use crate::secrets;
 const SOON_MINUTES: i64 = 5;
 const MAX_ICS_BYTES: usize = 5 * 1024 * 1024;
 
-pub fn spawn(bus: Bus) {
+pub fn spawn(bus: Bus, health: crate::health::HealthRegistry) {
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -39,11 +39,14 @@ pub fn spawn(bus: Bus) {
         loop {
             interval.tick().await;
             let Some(url) = secrets::get("calendar_ics_url") else {
+                health.idle("calendar", "Add an iCalendar URL to connect");
                 continue;
             };
             let Some(body) = fetch(&client, &url).await else {
+                health.failure("calendar", "Calendar fetch failed");
                 continue;
             };
+            health.success("calendar");
 
             let now = Utc::now();
             let events = parse_ics(&body);

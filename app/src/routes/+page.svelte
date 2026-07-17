@@ -14,6 +14,7 @@
     type PortCandidate,
     type Schedule,
     type Trigger,
+    type IntegrationHealth,
   } from "$lib/types";
 
   const NUM_LEDS = 33;
@@ -42,6 +43,7 @@
   let frame = $state<string>("000000".repeat(NUM_LEDS));
   let active = $state<ActiveState>({ activeName: "…", snoozedUntilMs: null, overlays: [] });
   let events = $state<BusEvent[]>([]);
+  let integrationHealth = $state<IntegrationHealth[]>([]);
 
   // --- persisted collections ---
   let animations = $state<Animation[]>([]);
@@ -100,6 +102,7 @@
       calendarInput = "";
     }
     notify(value.trim() ? "Integration secret saved" : "Integration disconnected");
+    integrationHealth = await invoke("integration_health");
   }
 
   function manualSpec(): AnimSpec {
@@ -434,6 +437,9 @@
         if (e.payload.source === "time") {
           loadIdle();
         }
+        if (e.payload.source === "slack" || e.payload.source === "calendar") {
+          invoke<IntegrationHealth[]>("integration_health").then((value) => (integrationHealth = value));
+        }
       }),
     ];
     (async () => {
@@ -449,6 +455,7 @@
       active = await invoke("get_active");
       slackSet = await invoke("has_secret", { name: "slack_token" });
       calendarSet = await invoke("has_secret", { name: "calendar_ics_url" });
+      integrationHealth = await invoke("integration_health");
       } catch (e) {
         reportError(`Could not load Luminode: ${e}`);
       }
@@ -798,6 +805,16 @@
     <!-- ======= events ======= -->
     <section class="integrations-view">
       <h2>Integrations</h2>
+      <div class="health-grid">
+        {#each integrationHealth as item (item.source)}
+          <article class="health-card {item.status}">
+            <strong>{item.source}</strong>
+            <span>{item.status === "healthy" ? "Connected" : item.status === "error" ? "Needs attention" : "Not configured"}</span>
+            {#if item.message}<small>{item.message}</small>{/if}
+            {#if item.lastSuccessMs}<small>Last success {new Date(item.lastSuccessMs).toLocaleString()}</small>{/if}
+          </article>
+        {/each}
+      </div>
       <div class="field">
         <label for="slacktok">Slack {slackSet ? "✓" : ""}</label>
         <input id="slacktok" type="password" placeholder={slackSet ? "token saved — paste to replace, save empty to clear" : "xoxp- user token"} bind:value={slackInput} />
@@ -888,6 +905,10 @@
   main[data-view="integrations"] .columns { grid-template-columns: minmax(0, 760px); justify-content: center; }
   .onboarding { display: flex; gap: 6px; flex-direction: column; padding: 14px 16px; margin-bottom: 18px; border: 1px solid #655126; background: #2a2417; border-radius: 10px; }
   .onboarding span { color: #d7c99e; }
+  .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 14px; }
+  .health-card { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+  .health-card.healthy { border-color: #27653d; }
+  .health-card.error { border-color: #8c3941; }
   .pill {
     padding: 3px 10px;
     border-radius: 99px;
