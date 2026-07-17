@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 #include <FastLED.h>
 
-#define FW_VERSION "0.3.2"
+#define FW_VERSION "0.3.3"
 #define PROTO_VERSION 2
 #define NUM_LEDS 33
 #define DATA_PIN 5
@@ -38,12 +38,19 @@
 // even the host's open()/close() hang) and nothing but a re-enumeration —
 // physical replug, bootloader entry — ever clears it. So if a host that was
 // actively talking (DTR up, bytes flowed) goes silent for this long, we
-// detach/attach USB ourselves: a software replug. The app pings every 3s
-// and declares us dead after 10s, so 15s of silence means the link is truly
-// gone, not just quiet. Armed only after the host has sent at least one
-// byte this DTR session, so a human watching a serial monitor without
-// typing never gets kicked; fires once per silence episode.
-#define CDC_STALL_MS 15000UL
+// detach/attach USB ourselves: a software replug. This MUST fire before the
+// app gives up: the app pings every 3s and closes the port 10s after the
+// last pong, and closing drops DTR, which disarms this check — and every
+// reconnect probe afterwards opens a fresh DTR session that restarts the
+// clock, so the silence window can never accumulate again while the app is
+// running. (The original 15s threshold was unreachable dead code for
+// exactly that reason — observed 2026-07-17/18: wedged board sat mute for
+// 30+ min, self-heal never fired.) 8s = two missed ping intervals, well
+// clear of the ≤3.1s healthy gap, and 2s inside the app's 10s give-up.
+// Armed only after the host has sent at least one byte this DTR session,
+// so a human watching a serial monitor without typing never gets kicked;
+// fires once per silence episode.
+#define CDC_STALL_MS 8000UL
 
 // Serial input line buffer. The largest command is a frame:
 // {"cmd":"frame","px":"<198 hex chars>"}\n  ≈ 222 bytes.
@@ -148,21 +155,31 @@ void bootProgressBar() {
 }
 
 void loop() {
-  // CDC self-heal bookkeeping: a fresh DTR session starts un-armed.
+  // CDC self-heal bookkeeping: a fresh DTR session starts un-armed. Clear
+  // any stale TX error too — the core sets it even for writes attempted
+  // while DTR was down (e.g. a reply that raced the host closing the port),
+  // and that isn't evidence this session's pipe is wedged.
   bool dtrUp = (bool)Serial;
   if (dtrUp && !dtrWasUp) {
     hostSpoke = false;
     lastRxMs = millis();
+    Serial.clearWriteError();
   }
   dtrWasUp = dtrUp;
 
   readSerial();
 
-  // CDC self-heal: host was talking, still holds DTR, but went silent past
-  // any plausible healthy gap -> the pipe is wedged; re-enumerate.
-  if (dtrUp && hostSpoke && !cdcCycled &&
-      millis() - lastRxMs > CDC_STALL_MS) {
+  // CDC self-heal: host was talking and still holds DTR, but either it went
+  // silent past any plausible healthy gap (host->device direction wedged) or
+  // our own replies are timing out inside the USB stack (device->host
+  // direction wedged — USB_Send gave up after 250ms of the host not
+  // draining, which a healthy host kernel always does regardless of what
+  // the app is up to). Both mean the pipe is gone; re-enumerate.
+  bool rxSilent = millis() - lastRxMs > CDC_STALL_MS;
+  bool txStuck = Serial.getWriteError() != 0;
+  if (dtrUp && hostSpoke && !cdcCycled && (rxSilent || txStuck)) {
     cdcCycled = true;
+    Serial.clearWriteError();
     USBDevice.detach();
     delay(250);
     USBDevice.attach();

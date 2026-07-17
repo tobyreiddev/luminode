@@ -49,6 +49,17 @@ const WEDGED_RETRY: Duration = Duration::from_secs(30);
 /// which are naturally 3s apart. 50ms is orders of magnitude more than the
 /// board needs to drain a packet, and the device thread can afford the nap.
 const MIN_WRITE_GAP: Duration = Duration::from_millis(50);
+/// No single write may span two full 64-byte USB packets: event-log data
+/// (2026-07-18) shows every wedge followed the one command whose line is
+/// ≥128 bytes (dual_progress effect, exactly 2×64 — two completely full
+/// back-to-back bulk packets into the 32U4's dual-bank receiver), while
+/// 65–68-byte writes (full packet + short packet) ran for 38 minutes
+/// straight. MIN_WRITE_GAP can't help there — the split happens inside one
+/// write_all — so long lines go out in chunks small enough that each is a
+/// single short packet, with a pause between chunks so the driver can't
+/// coalesce them back into full ones.
+const WRITE_CHUNK: usize = 48;
+const CHUNK_GAP: Duration = Duration::from_millis(15);
 
 pub enum DeviceMsg {
     /// Raw frame as hex string ("RRGGBB" × led count).
@@ -338,7 +349,6 @@ fn write_line(_ctx: &DeviceCtx, conn: &mut Option<Connection>, line: &str) {
     if since_last < MIN_WRITE_GAP {
         std::thread::sleep(MIN_WRITE_GAP - since_last);
     }
-    c.last_write = Instant::now();
     // Best-effort: a failed write is NOT a disconnect. While streaming frames
     // at 30fps the board periodically stops draining its USB buffer for a few
     // ms mid-render, so a write stalls past the port timeout and returns
@@ -349,7 +359,13 @@ fn write_line(_ctx: &DeviceCtx, conn: &mut Option<Connection>, line: &str) {
     // unplug makes the next `pump_reads` return a hard error (→ disconnect)
     // within one loop pass, and a mute-but-present board trips the pong
     // timeout in `heartbeat` after HEARTBEAT_TIMEOUT.
-    let _ = c.port.write_all(&data);
+    for (i, chunk) in data.chunks(WRITE_CHUNK).enumerate() {
+        if i > 0 {
+            std::thread::sleep(CHUNK_GAP);
+        }
+        let _ = c.port.write_all(chunk);
+    }
+    c.last_write = Instant::now();
 }
 
 /// Read whatever is available, handling complete lines. Returns false on a

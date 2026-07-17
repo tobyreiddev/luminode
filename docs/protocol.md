@@ -32,7 +32,7 @@ Used for the connection handshake ("is this port really a Luminode
 device?") and as a heartbeat every 3 s. Reply:
 
 ```json
-{"evt":"pong","fw":"0.3.2","proto":2,"leds":33}
+{"evt":"pong","fw":"0.3.3","proto":2,"leds":33}
 ```
 
 ### `frame` — raw pixel data
@@ -138,7 +138,7 @@ event bus, so they show up in the UI's event log.
 ```
 $ arduino-cli monitor -p /dev/cu.usbmodemXXXX --config 115200
 {"cmd":"ping"}
-{"evt":"pong","fw":"0.3.2","proto":2,"leds":33}
+{"evt":"pong","fw":"0.3.3","proto":2,"leds":33}
 {"cmd":"effect","name":"solid","color":[255,0,0]}
 {"evt":"ok"}
 {"cmd":"effect","name":"progress","color":[0,200,120],"progress":0.66}
