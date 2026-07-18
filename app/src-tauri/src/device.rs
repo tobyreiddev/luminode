@@ -276,13 +276,34 @@ fn handle_msg(ctx: &DeviceCtx, conn: &mut Option<Connection>, prober: &mut Probe
         DeviceMsg::Frame(hex) => {
             write_line(ctx, conn, &format!(r#"{{"cmd":"frame","px":"{hex}"}}"#));
         }
-        DeviceMsg::Effect(spec) => {
+        DeviceMsg::Effect(mut spec) => {
+            // Per-animation brightness: proto ≥3 firmware applies `level`
+            // on-device (the only way rainbow, which synthesizes its own
+            // colors, can dim). Older firmware gets the colors pre-scaled
+            // instead — same look everywhere except rainbow, which degrades
+            // to full brightness there.
+            let proto = ctx
+                .engine
+                .device_proto
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if proto < 3 && spec.level < 1.0 {
+                let level = spec.level.max(0.0);
+                spec.color = crate::animation::scale(spec.color, level);
+                spec.color2 = spec.color2.map(|c| crate::animation::scale(c, level));
+                spec.keyframes = spec
+                    .keyframes
+                    .map(|kf| kf.iter().map(|c| crate::animation::scale(*c, level)).collect());
+                spec.level = 1.0;
+            }
             let mut cmd = serde_json::json!({
                 "cmd": "effect",
                 "name": spec.effect,
                 "color": spec.color,
                 "speed": round3(spec.speed),
             });
+            if spec.level < 1.0 {
+                cmd["level"] = serde_json::json!(round3(spec.level));
+            }
             if let Some(c2) = spec.color2 {
                 cmd["color2"] = serde_json::json!(c2);
             }

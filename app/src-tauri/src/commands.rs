@@ -240,6 +240,25 @@ pub fn list_animations(state: State<AppState>) -> Vec<Animation> {
     state.store.list_animations()
 }
 
+/// One loop of an animation, pre-rendered for the list thumbnails.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewClip {
+    /// Hex frames (NUM_LEDS × 6 chars each), same encoding as engine:frame.
+    pub frames: Vec<String>,
+    pub duration_ms: u64,
+}
+
+#[tauri::command]
+pub fn preview_animation(spec: AnimSpec) -> Result<PreviewClip, String> {
+    spec.validate()?;
+    let (frames, duration_ms) = crate::animation::preview_clip(&spec);
+    Ok(PreviewClip {
+        frames,
+        duration_ms,
+    })
+}
+
 #[tauri::command]
 pub fn save_animation(
     state: State<AppState>,

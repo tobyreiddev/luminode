@@ -8,6 +8,7 @@ export interface AnimSpec {
   color: [number, number, number];
   color2: [number, number, number] | null;
   speed: number; // 0..1
+  level: number; // 0..1 per-animation brightness (composes with the global strip brightness)
   progress: number | null; // "progress" fill; "dual_progress" left bar
   progress2: number | null; // "dual_progress" right bar
   keyframes: [number, number, number][] | null; // "keyframes" color stops

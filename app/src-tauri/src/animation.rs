@@ -41,6 +41,12 @@ pub struct AnimSpec {
     /// 0.0 (slowest) .. 1.0 (fastest); same period mapping as the firmware.
     #[serde(default = "default_speed")]
     pub speed: f32,
+    /// Per-animation brightness, 0.0..1.0, applied as a final scale over the
+    /// rendered frame. Composes with (does not replace) the global strip
+    /// brightness. Defaults to 1.0 so specs persisted before the field
+    /// existed keep their look.
+    #[serde(default = "default_level")]
+    pub level: f32,
     /// Only used by the "progress" effect: fraction complete, 0.0..1.0.
     /// Injected from event payloads by the rule engine.
     #[serde(default)]
@@ -61,6 +67,9 @@ fn default_color() -> [u8; 3] {
 fn default_speed() -> f32 {
     0.3
 }
+fn default_level() -> f32 {
+    1.0
+}
 
 impl Default for AnimSpec {
     fn default() -> Self {
@@ -69,6 +78,7 @@ impl Default for AnimSpec {
             color: default_color(),
             color2: None,
             speed: 0.15,
+            level: 1.0,
             progress: None,
             progress2: None,
             keyframes: None,
@@ -97,6 +107,9 @@ impl AnimSpec {
         if !self.speed.is_finite() || !(0.0..=1.0).contains(&self.speed) {
             return Err("animation speed must be between 0 and 1".into());
         }
+        if !self.level.is_finite() || !(0.0..=1.0).contains(&self.level) {
+            return Err("animation brightness must be between 0 and 1".into());
+        }
         for (name, value) in [("progress", self.progress), ("progress2", self.progress2)] {
             if value.is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v)) {
                 return Err(format!("{name} must be between 0 and 1"));
@@ -121,6 +134,7 @@ impl AnimSpec {
             color: [0, 0, 0],
             color2: None,
             speed: 0.0,
+            level: 1.0,
             progress: None,
             progress2: None,
             keyframes: None,
@@ -147,6 +161,7 @@ fn progress_only_change(a: &AnimSpec, b: &AnimSpec) -> bool {
         && a.color == b.color
         && a.color2 == b.color2
         && a.speed == b.speed
+        && a.level == b.level
         && a.keyframes == b.keyframes
 }
 
@@ -178,7 +193,7 @@ impl EngineShared {
             brightness: AtomicU8::new(initial_brightness),
             brightness_gen: AtomicU64::new(1),
             connection_epoch: AtomicU64::new(0),
-            device_proto: AtomicU8::new(2),
+            device_proto: AtomicU8::new(3),
             preview_visible: AtomicBool::new(true),
             tray_preview: AtomicBool::new(tray_preview),
         }
@@ -591,7 +606,55 @@ pub fn render(spec: &AnimSpec, t_ms: u64, n: usize) -> Vec<[u8; 3]> {
         // "off" and anything unknown render black.
         _ => {}
     }
+    // Per-animation brightness: one final scale over whatever the effect
+    // produced, so every effect (including color-less rainbow) dims the
+    // same way. Mirrors the firmware's post-render nscale8 pass.
+    if spec.level < 1.0 {
+        let level = spec.level.max(0.0);
+        for px in &mut frame {
+            *px = scale(*px, level);
+        }
+    }
     frame
+}
+
+/// Frames for one loop of `spec`, for the animation-list thumbnails.
+/// Returns the hex frames plus the loop's duration in ms; a static look
+/// collapses to a single frame so the UI knows not to animate it.
+pub fn preview_clip(spec: &AnimSpec) -> (Vec<String>, u64) {
+    // Progress gauges carry no fraction until an event injects one — sweep
+    // the bar across a fixed window so the thumbnail shows what it does.
+    let sweep = matches!(spec.effect.as_str(), "progress" | "dual_progress")
+        && spec.progress.is_none()
+        && spec.progress2.is_none();
+    let duration_ms = if sweep {
+        3000
+    } else if spec.effect == "sparkle" {
+        // Sparkle isn't periodic (hashed time slots); a fixed window shows
+        // its density, and the pause between plays hides the wrap.
+        3000
+    } else {
+        cycle_period_ms(spec.speed)
+    };
+    let samples = (duration_ms / 50).clamp(8, 160) as usize;
+    let mut frames = Vec::with_capacity(samples);
+    for i in 0..samples {
+        let t_ms = duration_ms * i as u64 / samples as u64;
+        let frame = if sweep {
+            let fraction = i as f32 / (samples - 1) as f32;
+            let mut swept = spec.clone();
+            swept.progress = Some(fraction);
+            swept.progress2 = Some(fraction);
+            render(&swept, t_ms, NUM_LEDS)
+        } else {
+            render(spec, t_ms, NUM_LEDS)
+        };
+        frames.push(frame_to_hex(&frame));
+    }
+    if frames.iter().all(|f| f == &frames[0]) {
+        frames.truncate(1);
+    }
+    (frames, duration_ms)
 }
 
 pub fn frame_to_hex(frame: &[[u8; 3]]) -> String {
@@ -610,7 +673,7 @@ fn splitmix(mut x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-fn scale(c: [u8; 3], level: f32) -> [u8; 3] {
+pub fn scale(c: [u8; 3], level: f32) -> [u8; 3] {
     let level = level.clamp(0.0, 1.0);
     [
         (c[0] as f32 * level) as u8,
@@ -670,6 +733,59 @@ mod tests {
         }
         .validate()
         .is_err());
+        assert!(AnimSpec {
+            level: 1.5,
+            ..AnimSpec::default()
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn level_dims_every_effect() {
+        for effect in ["solid", "rainbow", "keyframes"] {
+            let full = AnimSpec {
+                effect: effect.into(),
+                keyframes: (effect == "keyframes").then_some(vec![[200, 100, 50]]),
+                ..AnimSpec::default()
+            };
+            let dim = AnimSpec {
+                level: 0.5,
+                ..full.clone()
+            };
+            let bright: u32 = render(&full, 0, 33).iter().flatten().map(|&c| c as u32).sum();
+            let dimmed: u32 = render(&dim, 0, 33).iter().flatten().map(|&c| c as u32).sum();
+            assert!(dimmed > 0, "{effect} went black at level 0.5");
+            assert!(dimmed < bright, "{effect} did not dim");
+        }
+    }
+
+    #[test]
+    fn preview_clip_collapses_static_looks_and_animates_the_rest() {
+        let solid = AnimSpec {
+            effect: "solid".into(),
+            ..AnimSpec::default()
+        };
+        let (frames, _) = preview_clip(&solid);
+        assert_eq!(frames.len(), 1);
+
+        let rainbow = AnimSpec {
+            effect: "rainbow".into(),
+            ..AnimSpec::default()
+        };
+        let (frames, duration_ms) = preview_clip(&rainbow);
+        assert!(frames.len() > 1);
+        assert_eq!(duration_ms, cycle_period_ms(rainbow.speed));
+
+        // A bare progress gauge sweeps its fill so the thumbnail moves.
+        let progress = AnimSpec {
+            effect: "progress".into(),
+            progress: None,
+            ..AnimSpec::default()
+        };
+        let (frames, _) = preview_clip(&progress);
+        assert!(frames.len() > 1);
+        assert_ne!(frames.first(), frames.last());
     }
 
     #[test]

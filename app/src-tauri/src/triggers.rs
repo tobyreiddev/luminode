@@ -270,6 +270,7 @@ impl TriggerEngine {
                     color: usage_color(session),
                     color2: Some(usage_color(weekly)),
                     speed: 0.0,
+                    level: 1.0,
                     progress: Some(session),
                     progress2: Some(weekly),
                     keyframes: None,

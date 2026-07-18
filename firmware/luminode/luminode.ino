@@ -16,8 +16,8 @@
 #include <ArduinoJson.h>
 #include <FastLED.h>
 
-#define FW_VERSION "0.3.3"
-#define PROTO_VERSION 2
+#define FW_VERSION "0.4.0"
+#define PROTO_VERSION 3
 #define NUM_LEDS 33
 #define DATA_PIN 5
 #define CLOCK_PIN 6
@@ -93,6 +93,10 @@ CRGB effectColor = CRGB::White;
 // dual_progress right bar. Per-effect default resolved in handleEffect.
 CRGB effectColor2 = CRGB::Black;
 float effectSpeed = 0.05;  // 0.0 (slowest) .. 1.0 (fastest)
+// Proto 3: per-effect brightness (the `level` param, 0.0..1.0, stored as
+// 0..255). Applied on top of the global `brightness` — it exists on-device
+// because rainbow synthesizes its own colors, so the app can't pre-scale it.
+uint8_t effectLevel = 255;
 float progressA = 0.0;     // progress / dual_progress left bar, 0.0..1.0
 float progressB = 0.0;     // dual_progress right bar, 0.0..1.0
 CRGB kfStops[MAX_KEYFRAMES];
@@ -193,6 +197,7 @@ void loop() {
     effect = FX_SPARKLE;
     effectColor = CRGB::White;
     effectSpeed = 0.05;
+    effectLevel = 255;
   }
 
   // Render/show at ~60Hz without ever blocking serial draining: the loop
@@ -363,6 +368,10 @@ void handleEffect(JsonDocument& doc) {
   }
   float speed = doc["speed"] | -1.0f;
   if (speed >= 0.0f && speed <= 1.0f) effectSpeed = speed;
+  // Absent level resets to full — it's part of the effect's look, restated
+  // with every effect command, not persistent device tuning.
+  float level = constrain((float)(doc["level"] | 1.0f), 0.0f, 1.0f);
+  effectLevel = (uint8_t)(level * 255.0f + 0.5f);
   // Absent progress fields reset to 0, same as the app's unwrap_or(0.0).
   progressA = constrain((float)(doc["progress"] | 0.0f), 0.0f, 1.0f);
   progressB = constrain((float)(doc["progress2"] | 0.0f), 0.0f, 1.0f);
@@ -448,7 +457,12 @@ void renderEffect() {
       // boot default (0.05): ~4 sparks/s, each fading out over ~2 s.
       fadeToBlackBy(leds, NUM_LEDS, 5 + (uint8_t)(effectSpeed * 50));
       if (random8() < 8 + (uint8_t)(effectSpeed * 176)) {
-        leds[random8(NUM_LEDS)] = effectColor;
+        // Level is applied here at ignition, not in the whole-frame pass
+        // below: sparkle accumulates in `leds` across frames, so a
+        // per-frame scale would compound into extra decay.
+        CRGB c = effectColor;
+        c.nscale8(effectLevel);
+        leds[random8(NUM_LEDS)] = c;
       }
       break;
     }
@@ -523,5 +537,11 @@ void renderEffect() {
       }
       break;
     }
+  }
+  // Per-effect brightness: one scale pass over the finished frame, matching
+  // the app's render(). Every effect except sparkle re-renders from scratch
+  // each frame, so scaling here is safe; sparkle scales at ignition above.
+  if (effectLevel < 255 && effect != FX_SPARKLE) {
+    nscale8(leds, NUM_LEDS, effectLevel);
   }
 }

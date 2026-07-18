@@ -3,6 +3,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
+  import AnimThumb from "$lib/AnimThumb.svelte";
   import {
     rgbToHex,
     hexToRgb,
@@ -24,6 +25,21 @@
   // "keyframes" needs its stop editor, so it's only offered where one exists.
   const EDITOR_EFFECTS = [...EFFECTS, "keyframes"];
   const TWO_COLOR_EFFECTS = new Set(["flash", "gradient", "progress", "dual_progress"]);
+  // Controls each effect actually uses: rainbow synthesizes its own colors,
+  // solid and the gauges have no motion (their speed is ignored by render),
+  // and only "off" has no brightness to set. Speed keeps a per-effect label
+  // because it means something different in each (for sparkle it sets spark
+  // density and fade together, not a cycle).
+  const COLOR_EFFECTS = new Set(["solid", "breathe", "chase", "sparkle", "flash", "gradient", "progress", "dual_progress"]);
+  const SPEED_LABELS: Record<string, string> = {
+    breathe: "Breath rate",
+    rainbow: "Scroll speed",
+    chase: "Speed",
+    sparkle: "Twinkle speed",
+    flash: "Blink rate",
+    gradient: "Rotation speed",
+    keyframes: "Loop speed",
+  };
   type View = "home" | "automations" | "integrations";
   let view = $state<View>("home");
   let theme = $state<"system" | "dark" | "light">("system");
@@ -69,6 +85,7 @@
   let colorHex = $state("#0050ff");
   let color2Hex = $state("#000000");
   let speed = $state(0.5);
+  let levelPct = $state(100);
   let progressPct = $state(50);
   let progress2Pct = $state(50);
   let brightness = $state(64);
@@ -83,6 +100,7 @@
   let eaColorHex = $state("#0050ff");
   let eaColor2Hex = $state("#000000");
   let eaSpeed = $state(0.5);
+  let eaLevelPct = $state(100);
   let eaKeyframes = $state<string[]>([]);
   let eaDurationS = $state(""); // seconds as text; "" = runs forever
 
@@ -124,6 +142,7 @@
       color: hexToRgb(colorHex),
       color2: TWO_COLOR_EFFECTS.has(effect) ? hexToRgb(color2Hex) : null,
       speed,
+      level: levelPct / 100,
       progress: effect === "progress" || effect === "dual_progress" ? progressPct / 100 : null,
       progress2: effect === "dual_progress" ? progress2Pct / 100 : null,
       keyframes: null,
@@ -148,6 +167,7 @@
       eaColorHex = rgbToHex(a.spec.color);
       eaColor2Hex = a.spec.color2 ? rgbToHex(a.spec.color2) : "#000000";
       eaSpeed = a.spec.speed;
+      eaLevelPct = Math.round((a.spec.level ?? 1) * 100);
       eaKeyframes = (a.spec.keyframes ?? []).map(rgbToHex);
       eaDurationS = a.durationMs != null ? String(a.durationMs / 1000) : "";
     } else {
@@ -156,6 +176,7 @@
       eaColorHex = "#0050ff";
       eaColor2Hex = "#000000";
       eaSpeed = 0.5;
+      eaLevelPct = 100;
       eaKeyframes = [];
       eaDurationS = "";
     }
@@ -170,6 +191,7 @@
       color: hexToRgb(eaColorHex),
       color2: TWO_COLOR_EFFECTS.has(eaEffect) ? hexToRgb(eaColor2Hex) : null,
       speed: eaSpeed,
+      level: eaLevelPct / 100,
       progress: null,
       progress2: null,
       keyframes: eaEffect === "keyframes" ? eaKeyframes.map(hexToRgb) : null,
@@ -569,6 +591,13 @@
       {#if status.connected}
         <button class="subtle" onclick={() => invoke("forget_device")}>Forget device</button>
       {/if}
+      <!-- Device-level master dimmer; per-animation Brightness lives with the
+           animation controls. Deliberately up here so the two never stack. -->
+      <label class="strip-bright" title="Master brightness applied on the device to everything the strip shows">
+        Strip brightness
+        <input type="range" min="0" max="255" step="1" bind:value={brightness} onchange={onBrightness} />
+        <span>{brightness}</span>
+      </label>
     </div>
     {#if !status.connected && candidates.length > 1}
       <div class="picker">
@@ -605,18 +634,29 @@
           {#each EFFECTS as e}<option value={e}>{e}</option>{/each}
         </select>
       </div>
-      <div class="field">
-        <label for="color">Color</label>
-        <input id="color" type="color" bind:value={colorHex} />
-        {#if TWO_COLOR_EFFECTS.has(effect)}
-          <label for="color2">2nd</label>
-          <input id="color2" type="color" bind:value={color2Hex} />
-        {/if}
-      </div>
-      <div class="field">
-        <label for="speed">Speed</label>
-        <input id="speed" type="range" min="0" max="1" step="0.05" bind:value={speed} />
-      </div>
+      {#if COLOR_EFFECTS.has(effect)}
+        <div class="field">
+          <label for="color">Color</label>
+          <input id="color" type="color" bind:value={colorHex} />
+          {#if TWO_COLOR_EFFECTS.has(effect)}
+            <label for="color2">2nd</label>
+            <input id="color2" type="color" bind:value={color2Hex} />
+          {/if}
+        </div>
+      {/if}
+      {#if effect in SPEED_LABELS}
+        <div class="field">
+          <label for="speed">{SPEED_LABELS[effect]}</label>
+          <input id="speed" type="range" min="0" max="1" step="0.05" bind:value={speed} />
+        </div>
+      {/if}
+      {#if effect !== "off"}
+        <div class="field">
+          <label for="level">Brightness</label>
+          <input id="level" type="range" min="0" max="100" step="1" bind:value={levelPct} />
+          <span>{levelPct}%</span>
+        </div>
+      {/if}
       {#if effect === "progress" || effect === "dual_progress"}
         <div class="field">
           <label for="pct">{effect === "dual_progress" ? "Left %" : "Fill %"}</label>
@@ -631,11 +671,6 @@
           <span>{progress2Pct}%</span>
         </div>
       {/if}
-      <div class="field">
-        <label for="bright">Brightness</label>
-        <input id="bright" type="range" min="0" max="255" step="1" bind:value={brightness} onchange={onBrightness} />
-        <span>{brightness}</span>
-      </div>
       <div class="field">
         <button class="primary" onclick={applyManual}>Apply</button>
         {#if manualSaveName === null}
@@ -657,7 +692,7 @@
       <ul class="list">
         {#each animations as a (a.id)}
           <li>
-            <span class="swatch" style="background:{rgbToHex(a.spec.color)}"></span>
+            <AnimThumb spec={a.spec} />
             <span class="grow">{a.name} <small>({a.spec.effect}{a.durationMs != null ? ` · ${a.durationMs / 1000}s` : ""})</small></span>
             <button onclick={() => applyAnimation(a.id)}>Apply</button>
             <button class="subtle" onclick={() => startEditAnimation(a)}>edit</button>
@@ -694,7 +729,7 @@
               </span>
             </div>
             <small>The whole strip fades through the stops in order, looping back to the first. Speed sets the loop time.</small>
-          {:else}
+          {:else if COLOR_EFFECTS.has(eaEffect)}
             <div class="field">
               <label for="ac">Color</label>
               <input id="ac" type="color" bind:value={eaColorHex} />
@@ -704,10 +739,19 @@
               {/if}
             </div>
           {/if}
-          <div class="field">
-            <label for="as">Speed</label>
-            <input id="as" type="range" min="0" max="1" step="0.05" bind:value={eaSpeed} />
-          </div>
+          {#if eaEffect in SPEED_LABELS}
+            <div class="field">
+              <label for="as">{SPEED_LABELS[eaEffect]}</label>
+              <input id="as" type="range" min="0" max="1" step="0.05" bind:value={eaSpeed} />
+            </div>
+          {/if}
+          {#if eaEffect !== "off"}
+            <div class="field">
+              <label for="al">Brightness</label>
+              <input id="al" type="range" min="0" max="100" step="1" bind:value={eaLevelPct} />
+              <span>{eaLevelPct}%</span>
+            </div>
+          {/if}
           <div class="field">
             <label for="adur">Length (s)</label>
             <input id="adur" type="number" class="narrow" min="0" step="0.5" placeholder="forever" bind:value={eaDurationS} />
@@ -1033,6 +1077,8 @@
   .pill.ok { background: #123c22; color: #7ce8a5; }
   .pill.bad { background: #40191c; color: #ff9aa0; }
   .picker { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .strip-bright { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+  .strip-bright input { width: 90px; }
 
   .columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
   @media (max-width: 980px) { .columns { grid-template-columns: 1fr; } }
@@ -1079,7 +1125,6 @@
   .list li:nth-child(odd) { background: #1a1d22; }
   .list li.disabled { opacity: 0.5; }
   .grow { flex: 1; }
-  .swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
   .log { max-height: 320px; overflow-y: auto; }
   .dim { color: #6f7683; }
   small { color: var(--muted); }

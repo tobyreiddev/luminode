@@ -6,11 +6,17 @@ LEDs the bandwidth is trivial, and being able to debug the device from any
 serial monitor by typing commands is worth far more than the parsing cost.
 Revisit only if a longer strip actually saturates the link.
 
-Protocol version: **2** (reported in `pong`; bump when making a breaking
+Protocol version: **3** (reported in `pong`; bump when making a breaking
 change and gate app behavior on it).
 
 Version history:
 
+* **3** — `level` param on `effect`: per-animation brightness 0.0–1.0,
+  applied on-device over the finished frame (and composing with the global
+  `brightness`). It must live on the device because `rainbow` synthesizes
+  its own colors; for every other effect the app pre-scales the colors it
+  sends when talking to proto-2 firmware, so only rainbow degrades (to full
+  brightness) there.
 * **2** — every app effect became firmware-native (`flash`, `gradient`,
   `progress`, `dual_progress`, `keyframes`, plus `color2`/`progress`/
   `progress2`/`kf` params on `effect`). Motivation: sustained frame
@@ -32,7 +38,7 @@ Used for the connection handshake ("is this port really a Luminode
 device?") and as a heartbeat every 3 s. Reply:
 
 ```json
-{"evt":"pong","fw":"0.3.3","proto":2,"leds":33}
+{"evt":"pong","fw":"0.4.0","proto":3,"leds":33}
 ```
 
 ### `frame` — raw pixel data
@@ -70,6 +76,12 @@ sparkle effect rather than freezing on the last frame.
   — for `sparkle` (stochastic, not cycle-based) speed sets twinkle density
   and fade rate: slow is a sparse sparkle whose sparks linger ~2 s, fast is
   a dense quick twinkle
+* `level`: 0.0–1.0, optional — per-animation brightness, applied on-device
+  as a final scale over the rendered frame (so it also dims `rainbow`,
+  whose colors the device synthesizes). Composes with the global
+  `brightness` command rather than replacing it. **Resets to 1.0 when
+  omitted** — it's part of the effect's look, restated with each `effect`
+  command, not persistent device tuning.
 * `progress`, `progress2`: 0.0–1.0 — progress bar fill / dual_progress left
   and right bars. **Reset to 0 when omitted** (they're state injected per
   update, not persistent tuning). Updating a gauge = re-send the whole
@@ -138,8 +150,8 @@ event bus, so they show up in the UI's event log.
 ```
 $ arduino-cli monitor -p /dev/cu.usbmodemXXXX --config 115200
 {"cmd":"ping"}
-{"evt":"pong","fw":"0.3.3","proto":2,"leds":33}
-{"cmd":"effect","name":"solid","color":[255,0,0]}
+{"evt":"pong","fw":"0.4.0","proto":3,"leds":33}
+{"cmd":"effect","name":"solid","color":[255,0,0],"level":0.4}
 {"evt":"ok"}
 {"cmd":"effect","name":"progress","color":[0,200,120],"progress":0.66}
 {"evt":"ok"}

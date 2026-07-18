@@ -181,6 +181,7 @@ pub fn run() {
             commands::get_brightness,
             commands::set_preview_visible,
             commands::list_animations,
+            commands::preview_animation,
             commands::save_animation,
             commands::update_animation,
             commands::delete_animation,
