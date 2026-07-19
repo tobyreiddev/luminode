@@ -111,6 +111,11 @@
   let eaLevelPct = $state(100);
   let eaKeyframes = $state<string[]>([]);
   let eaDurationS = $state("");
+  // "Try on strip" pins a manual overlay (priority i32::MAX, no expiry) so the
+  // preview holds while editing. Track it so closing the editor releases it —
+  // otherwise the pin outlives the editor and silently blocks every trigger
+  // (Claude working, meetings, …) until the app restarts.
+  let editorPreviewActive = $state(false);
 
   // --- trigger + animation editors, expanded inline into their cards ---
   let editingTrigger = $state<Trigger | null>(null);
@@ -310,12 +315,14 @@
     expandedAnimId = null; // the new-animation card is keyed on id 0
   }
   function cancelAnimEdit() {
+    releaseEditorPreview();
     editingAnimation = null;
     expandedAnimId = null;
   }
 
   // -- animations --
   function startEditAnimation(a: Animation | null) {
+    releaseEditorPreview(); // drop any preview from the editor we're leaving
     if (a) {
       editingAnimation = { id: a.id, name: a.name };
       eaEffect = a.spec.effect;
@@ -364,12 +371,21 @@
       reportError(e);
       return;
     }
+    await releaseEditorPreview();
     editingAnimation = null;
     expandedAnimId = null;
     animations = await invoke("list_animations");
   }
   async function tryEditorOnStrip() {
     await invoke("set_manual", { spec: editorSpec() });
+    editorPreviewActive = true;
+  }
+  // Release a "Try on strip" preview when the editor closes so it can't linger
+  // as a max-priority overlay masking every trigger.
+  async function releaseEditorPreview() {
+    if (!editorPreviewActive) return;
+    editorPreviewActive = false;
+    await invoke("clear_manual");
   }
   async function saveManualAsAnimation() {
     const name = manualSaveName?.trim();
@@ -912,10 +928,10 @@
               <div class="field"><span class="label">Color</span><div class="row"><input type="color" bind:value={eaColorHex} />{#if TWO_COLOR_EFFECTS.has(eaEffect)}<span class="dim">2nd</span><input type="color" bind:value={eaColor2Hex} />{/if}</div></div>
             {/if}
             {#if eaEffect in SPEED_LABELS}
-              <label class="field"><span class="label">{SPEED_LABELS[eaEffect]}</span><input class="slider" type="range" min="0" max="1" step="0.05" bind:value={eaSpeed} /></label>
+              <label class="field"><span class="label">{SPEED_LABELS[eaEffect]}</span><input class="slider" type="range" min="0" max="1" step="0.05" bind:value={eaSpeed} style="--fill:{pct(eaSpeed, 1)}%" /></label>
             {/if}
             {#if eaEffect !== "off"}
-              <label class="field"><span class="label">Brightness</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={eaLevelPct} /><span class="value">{eaLevelPct}%</span></label>
+              <label class="field"><span class="label">Brightness</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={eaLevelPct} style="--fill:{pct(eaLevelPct, 100)}%" /><span class="value">{eaLevelPct}%</span></label>
             {/if}
             <label class="field"><span class="label">Length (s)</span><input class="narrow" type="number" min="0" step="0.5" placeholder="forever" bind:value={eaDurationS} /></label>
             <div class="row"><button class="primary" onclick={saveAnimationEdit} disabled={!editingAnimation.name.trim()}>Save</button><button onclick={tryEditorOnStrip}>Try on strip</button><button onclick={cancelAnimEdit}>Cancel</button></div>
@@ -953,16 +969,16 @@
             <div class="field"><span class="label">Color</span><div class="row"><input type="color" bind:value={colorHex} />{#if TWO_COLOR_EFFECTS.has(effect)}<span class="dim">2nd</span><input type="color" bind:value={color2Hex} />{/if}</div></div>
           {/if}
           {#if effect in SPEED_LABELS}
-            <label class="field"><span class="label">{SPEED_LABELS[effect]}</span><input class="slider" type="range" min="0" max="1" step="0.05" bind:value={speed} /></label>
+            <label class="field"><span class="label">{SPEED_LABELS[effect]}</span><input class="slider" type="range" min="0" max="1" step="0.05" bind:value={speed} style="--fill:{pct(speed, 1)}%" /></label>
           {/if}
           {#if effect !== "off"}
-            <label class="field"><span class="label">Brightness</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={levelPct} /><span class="value">{levelPct}%</span></label>
+            <label class="field"><span class="label">Brightness</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={levelPct} style="--fill:{pct(levelPct, 100)}%" /><span class="value">{levelPct}%</span></label>
           {/if}
           {#if effect === "progress" || effect === "dual_progress"}
-            <label class="field"><span class="label">{effect === "dual_progress" ? "Left %" : "Fill %"}</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={progressPct} /><span class="value">{progressPct}%</span></label>
+            <label class="field"><span class="label">{effect === "dual_progress" ? "Left %" : "Fill %"}</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={progressPct} style="--fill:{pct(progressPct, 100)}%" /><span class="value">{progressPct}%</span></label>
           {/if}
           {#if effect === "dual_progress"}
-            <label class="field"><span class="label">Right %</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={progress2Pct} /><span class="value">{progress2Pct}%</span></label>
+            <label class="field"><span class="label">Right %</span><input class="slider" type="range" min="0" max="100" step="1" bind:value={progress2Pct} style="--fill:{pct(progress2Pct, 100)}%" /><span class="value">{progress2Pct}%</span></label>
           {/if}
           <div class="row">
             <button class="primary" onclick={applyManual}>Apply</button>
