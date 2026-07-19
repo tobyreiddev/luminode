@@ -6,11 +6,19 @@ LEDs the bandwidth is trivial, and being able to debug the device from any
 serial monitor by typing commands is worth far more than the parsing cost.
 Revisit only if a longer strip actually saturates the link.
 
-Protocol version: **3** (reported in `pong`; bump when making a breaking
+Protocol version: **4** (reported in `pong`; bump when making a breaking
 change and gate app behavior on it).
 
 Version history:
 
+* **4** — `calibrate` command: persistent per-channel gain (white-balance
+  trim) and strip orientation, applied on-device to the final frame so it
+  covers native effects *and* streamed frames. Held in RAM only (device
+  tuning, not an effect param — it does not reset with each `effect`), so the
+  app re-sends it on every reconnect. Rendered via a two-buffer present step:
+  effects/frames render into a linear working buffer, which is copied to the
+  displayed buffer with gain + orientation applied, so a constant gain never
+  compounds and `sparkle`'s frame-to-frame accumulation is undisturbed.
 * **3** — `level` param on `effect`: per-animation brightness 0.0–1.0,
   applied on-device over the finished frame (and composing with the global
   `brightness`). It must live on the device because `rainbow` synthesizes
@@ -38,7 +46,7 @@ Used for the connection handshake ("is this port really a Luminode
 device?") and as a heartbeat every 3 s. Reply:
 
 ```json
-{"evt":"pong","fw":"0.4.0","proto":3,"leds":33}
+{"evt":"pong","fw":"0.4.0","proto":4,"leds":33}
 ```
 
 ### `frame` — raw pixel data
@@ -123,12 +131,29 @@ frequent mid-connection write gets the single-packet fast path. Reply:
 Global brightness 0–255, applied on the device (FastLED scaling) so it
 affects both streamed frames and built-in effects. Reply: `{"evt":"ok"}`.
 
+### `calibrate` — persistent gain + orientation (proto 4)
+
+```json
+{"cmd":"calibrate","gain":[255,255,246],"reversed":false}
+```
+
+* `gain`: `[r,g,b]`, each 0–255, optional — per-channel white-balance trim
+  applied as a final scale over every displayed pixel (a green-heavy strip
+  gets its green pulled down, etc.). Omitted → unchanged.
+* `reversed`: bool, optional — flip strip direction (LED 0 becomes the far
+  end). Omitted → unchanged.
+
+Unlike `level`/`progress`, calibration **persists** until re-sent — it's
+device tuning, not part of an effect's look — but lives in RAM only, so the
+app re-sends it after every (re)connect. Applied to both built-in effects
+and streamed frames. Reply: `{"evt":"ok"}`.
+
 ## Device → app
 
 | Line | Meaning |
 |---|---|
 | `{"evt":"pong","fw":…,"proto":…,"leds":…}` | ping reply; identity + capabilities |
-| `{"evt":"ok"}` | command accepted (`effect`, `brightness`) |
+| `{"evt":"ok"}` | command accepted (`effect`, `brightness`, `progress`, `calibrate`) |
 | `{"evt":"err","msg":"…"}` | rejected line: `bad json`, `bad frame`, `bad kf`, `unknown cmd`, `line too long`, … |
 
 The app surfaces `err` replies as `device/firmware_error` events on its
@@ -150,7 +175,7 @@ event bus, so they show up in the UI's event log.
 ```
 $ arduino-cli monitor -p /dev/cu.usbmodemXXXX --config 115200
 {"cmd":"ping"}
-{"evt":"pong","fw":"0.4.0","proto":3,"leds":33}
+{"evt":"pong","fw":"0.4.0","proto":4,"leds":33}
 {"cmd":"effect","name":"solid","color":[255,0,0],"level":0.4}
 {"evt":"ok"}
 {"cmd":"effect","name":"progress","color":[0,200,120],"progress":0.66}

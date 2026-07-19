@@ -71,8 +71,28 @@ pub fn run() {
                 .map(|v| v == "true")
                 .unwrap_or(true);
 
+            // Master power and device calibration persist across restarts;
+            // the engine re-sends calibration to the strip on every connect.
+            let power = store.setting("power").as_deref() != Some("false");
+            let start_minimized = store.setting("start_minimized").as_deref() == Some("true");
+            let get_gain = |key: &str| {
+                store
+                    .setting(key)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(255u8)
+            };
+            let calibration = animation::Calibration {
+                gain: [get_gain("gain_r"), get_gain("gain_g"), get_gain("gain_b")],
+                reversed: store.setting("orientation").as_deref() == Some("rtl"),
+            };
+
             let bus = events::new_bus();
-            let engine = Arc::new(EngineShared::new(initial_brightness, tray_animation));
+            let engine = Arc::new(EngineShared::new(
+                initial_brightness,
+                tray_animation,
+                power,
+                calibration,
+            ));
             let device_status = Arc::new(Mutex::new(DeviceStatus::default()));
             let candidates = Arc::new(Mutex::new(Vec::new()));
             let health = health::HealthRegistry::default();
@@ -161,6 +181,14 @@ pub fn run() {
             });
 
             setup_tray(app, trigger_engine, tray_engine, tray_store)?;
+
+            // "Start minimized": open straight to the tray, no window. The
+            // tray's Open item (and the dock icon) bring it back.
+            if start_minimized {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -179,6 +207,15 @@ pub fn run() {
             commands::clear_manual,
             commands::set_brightness,
             commands::get_brightness,
+            commands::set_power,
+            commands::set_brightness_cap,
+            commands::set_calibration,
+            commands::identify,
+            commands::set_idle_dim,
+            commands::set_accent,
+            commands::set_start_minimized,
+            commands::set_autostart,
+            commands::get_app_settings,
             commands::set_preview_visible,
             commands::list_animations,
             commands::preview_animation,
@@ -251,7 +288,9 @@ fn setup_tray(
         "tray_anim",
         "Show animation in menu bar",
         true,
-        engine.tray_preview.load(std::sync::atomic::Ordering::Relaxed),
+        engine
+            .tray_preview
+            .load(std::sync::atomic::Ordering::Relaxed),
         None::<&str>,
     )?;
     let autostart = CheckMenuItem::with_id(
@@ -293,7 +332,9 @@ fn setup_tray(
             "tray_anim" => {
                 // Flip, persist, and reflect; the engine loop repaints (or
                 // restores the default icon) on its next tick.
-                let on = !engine.tray_preview.load(std::sync::atomic::Ordering::Relaxed);
+                let on = !engine
+                    .tray_preview
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 engine
                     .tray_preview
                     .store(on, std::sync::atomic::Ordering::Relaxed);

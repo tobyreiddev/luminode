@@ -218,13 +218,186 @@ pub fn clear_manual(state: State<AppState>) {
 
 #[tauri::command]
 pub fn set_brightness(state: State<AppState>, value: u8) {
-    state.engine.set_brightness(value);
+    // The user-set value is stored as given; the brightness *cap* (Devices ›
+    // Power & Calibration) is applied on top so the strip never exceeds it.
+    let capped = value.min(brightness_cap(&state));
+    state.engine.set_brightness(capped);
     state.store.set_setting("brightness", &value.to_string());
+    state.triggers.note_activity();
 }
 
 #[tauri::command]
 pub fn get_brightness(state: State<AppState>) -> u8 {
-    state.engine.brightness.load(Ordering::Relaxed)
+    // Report the user's set value (may exceed the live capped output), so the
+    // slider position is stable when the cap changes.
+    state
+        .store
+        .setting("brightness")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| state.engine.brightness.load(Ordering::Relaxed))
+}
+
+fn brightness_cap(state: &AppState) -> u8 {
+    state
+        .store
+        .setting("brightness_cap")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(255)
+}
+
+/// Master power. Off drives the device to brightness 0 (darkening native
+/// effects too) while the stored brightness value survives for power-on.
+#[tauri::command]
+pub fn set_power(state: State<AppState>, on: bool) {
+    state.engine.set_power(on);
+    state
+        .store
+        .set_setting("power", if on { "true" } else { "false" });
+    state.triggers.note_activity();
+}
+
+/// Upper bound on strip brightness (10–255). Re-applies to the live output.
+#[tauri::command]
+pub fn set_brightness_cap(state: State<AppState>, value: u8) -> Result<(), String> {
+    if value < 10 {
+        return Err("brightness cap must be at least 10".into());
+    }
+    state
+        .store
+        .set_setting("brightness_cap", &value.to_string());
+    // Re-clamp the current set brightness against the new cap.
+    let current = get_brightness(state.clone());
+    state.engine.set_brightness(current.min(value));
+    Ok(())
+}
+
+/// Persistent device calibration: per-channel gain (0–255) + orientation.
+/// Persisted and pushed to the device (which applies it to all effects).
+#[tauri::command]
+pub fn set_calibration(
+    state: State<AppState>,
+    gain: [u8; 3],
+    reversed: bool,
+) -> Result<(), String> {
+    state.store.set_setting("gain_r", &gain[0].to_string());
+    state.store.set_setting("gain_g", &gain[1].to_string());
+    state.store.set_setting("gain_b", &gain[2].to_string());
+    state
+        .store
+        .set_setting("orientation", if reversed { "rtl" } else { "ltr" });
+    state
+        .engine
+        .set_calibration(crate::animation::Calibration { gain, reversed });
+    Ok(())
+}
+
+/// Flash the whole strip white for ~1.4s, then revert — a "which strip is
+/// this?" identify pulse. Uses the manual-with-expiry path so it falls away
+/// on its own.
+#[tauri::command]
+pub fn identify(state: State<AppState>) {
+    let white = AnimSpec {
+        effect: "solid".into(),
+        color: [255, 255, 255],
+        ..AnimSpec::off()
+    };
+    state
+        .triggers
+        .set_manual(white, Some(std::time::Duration::from_millis(1400)));
+}
+
+/// Minutes of inactivity before the strip dims (0 = never).
+#[tauri::command]
+pub fn set_idle_dim(state: State<AppState>, minutes: u32) {
+    state
+        .store
+        .set_setting("idle_dim_minutes", &minutes.to_string());
+    state.triggers.set_idle_dim_minutes(minutes);
+}
+
+/// UI accent color (hex like "#5ec8f2"). Purely cosmetic; persisted so it
+/// survives restarts.
+#[tauri::command]
+pub fn set_accent(state: State<AppState>, hex: String) -> Result<(), String> {
+    let ok =
+        hex.len() == 7 && hex.starts_with('#') && hex[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !ok {
+        return Err("accent must be a #rrggbb hex color".into());
+    }
+    state.store.set_setting("accent", &hex);
+    Ok(())
+}
+
+/// Whether to keep the window hidden (tray-only) on launch.
+#[tauri::command]
+pub fn set_start_minimized(state: State<AppState>, enabled: bool) {
+    state
+        .store
+        .set_setting("start_minimized", if enabled { "true" } else { "false" });
+}
+
+/// Launch-at-login, backed by the autostart plugin (same state the tray
+/// toggle shows). Returns the *actual* enabled state after the change.
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt as _;
+    let launcher = app.autolaunch();
+    let result = if enabled {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    };
+    result.map_err(|e| e.to_string())?;
+    Ok(launcher.is_enabled().unwrap_or(enabled))
+}
+
+/// Everything the redesigned UI needs to render its controls in one call.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    power: bool,
+    brightness: u8,
+    brightness_cap: u8,
+    gain: [u8; 3],
+    reversed: bool,
+    idle_dim_minutes: u32,
+    start_minimized: bool,
+    autostart: bool,
+    accent: String,
+}
+
+#[tauri::command]
+pub fn get_app_settings(app: tauri::AppHandle, state: State<AppState>) -> AppSettings {
+    use tauri_plugin_autostart::ManagerExt as _;
+    let get_u8 = |key: &str, default: u8| {
+        state
+            .store
+            .setting(key)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    AppSettings {
+        power: state.engine.power(),
+        brightness: get_brightness(state.clone()),
+        brightness_cap: get_u8("brightness_cap", 255),
+        gain: [
+            get_u8("gain_r", 255),
+            get_u8("gain_g", 255),
+            get_u8("gain_b", 255),
+        ],
+        reversed: state.store.setting("orientation").as_deref() == Some("rtl"),
+        idle_dim_minutes: state
+            .store
+            .setting("idle_dim_minutes")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        start_minimized: state.store.setting("start_minimized").as_deref() == Some("true"),
+        autostart: app.autolaunch().is_enabled().unwrap_or(false),
+        accent: state
+            .store
+            .setting("accent")
+            .unwrap_or_else(|| "#5ec8f2".into()),
+    }
 }
 
 #[tauri::command]

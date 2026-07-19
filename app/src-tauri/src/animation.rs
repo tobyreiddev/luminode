@@ -165,6 +165,49 @@ fn progress_only_change(a: &AnimSpec, b: &AnimSpec) -> bool {
         && a.keyframes == b.keyframes
 }
 
+/// Persistent device calibration: per-channel gain (white-balance trim) plus
+/// strip orientation. The firmware (proto ≥4) applies this on-device to every
+/// effect and frame; the app mirrors it onto the UI preview so the two match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Calibration {
+    pub gain: [u8; 3],
+    pub reversed: bool,
+}
+
+impl Default for Calibration {
+    fn default() -> Self {
+        Self {
+            gain: [255, 255, 255],
+            reversed: false,
+        }
+    }
+}
+
+/// FastLED's fixed-point scale8 (SCALE8_FIXED): scale=255 is identity. Mirror
+/// it exactly so the preview's calibrated colors match the strip's.
+fn scale8(v: u8, scale: u8) -> u8 {
+    ((v as u16 * (1 + scale as u16)) >> 8) as u8
+}
+
+/// Apply calibration to a rendered frame for the preview/tray: per-channel
+/// gain, then orientation. Matches the firmware's `present()`.
+pub fn apply_calibration(frame: &[[u8; 3]], cal: &Calibration) -> Vec<[u8; 3]> {
+    let mut out: Vec<[u8; 3]> = frame
+        .iter()
+        .map(|px| {
+            [
+                scale8(px[0], cal.gain[0]),
+                scale8(px[1], cal.gain[1]),
+                scale8(px[2], cal.gain[2]),
+            ]
+        })
+        .collect();
+    if cal.reversed {
+        out.reverse();
+    }
+    out
+}
+
 /// State shared between the engine thread and the rest of the app.
 /// Writers bump the generation counters; the engine thread compares them
 /// against what it last sent to know when a re-send is due.
@@ -172,6 +215,17 @@ pub struct EngineShared {
     spec: Mutex<(AnimSpec, u64)>,
     pub brightness: AtomicU8,
     brightness_gen: AtomicU64,
+    /// Master power. When false the device is driven to brightness 0 (which
+    /// darkens native effects too) and the preview blacks out, while the
+    /// stored brightness value is kept intact for when it flips back on.
+    power: AtomicBool,
+    /// Idle-dim factor over brightness, 0..255 (255 = no dim). Driven by the
+    /// trigger engine's inactivity timer; folded into the sent brightness.
+    idle_scale: AtomicU8,
+    /// Persistent device calibration (gain + orientation), re-sent on every
+    /// (re)connect. Bumps `calibration_gen` when it changes.
+    calibration: Mutex<Calibration>,
+    calibration_gen: AtomicU64,
     /// Bumped by the device manager on every successful (re)connect so the
     /// engine re-sends the current effect + brightness to the fresh device.
     pub connection_epoch: AtomicU64,
@@ -187,13 +241,25 @@ pub struct EngineShared {
 }
 
 impl EngineShared {
-    pub fn new(initial_brightness: u8, tray_preview: bool) -> Self {
+    pub fn new(
+        initial_brightness: u8,
+        tray_preview: bool,
+        power: bool,
+        calibration: Calibration,
+    ) -> Self {
         Self {
             spec: Mutex::new((AnimSpec::default(), 1)),
             brightness: AtomicU8::new(initial_brightness),
             brightness_gen: AtomicU64::new(1),
+            power: AtomicBool::new(power),
+            idle_scale: AtomicU8::new(255),
+            calibration: Mutex::new(calibration),
+            calibration_gen: AtomicU64::new(1),
+            // Optimistic until the first pong: assume the latest firmware, so
+            // proto-gated commands (calibrate) aren't withheld from a device
+            // that supports them before the handshake completes.
             connection_epoch: AtomicU64::new(0),
-            device_proto: AtomicU8::new(3),
+            device_proto: AtomicU8::new(4),
             preview_visible: AtomicBool::new(true),
             tray_preview: AtomicBool::new(tray_preview),
         }
@@ -214,6 +280,48 @@ impl EngineShared {
     pub fn set_brightness(&self, value: u8) {
         self.brightness.store(value, Ordering::Relaxed);
         self.brightness_gen.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn set_power(&self, on: bool) {
+        if self.power.swap(on, Ordering::Relaxed) != on {
+            self.brightness_gen.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn power(&self) -> bool {
+        self.power.load(Ordering::Relaxed)
+    }
+
+    /// Set the idle-dim factor (255 = off). Only bumps the send generation on
+    /// a real change, so the 250ms recompute can call it every tick cheaply.
+    pub fn set_idle_scale(&self, scale: u8) {
+        if self.idle_scale.swap(scale, Ordering::Relaxed) != scale {
+            self.brightness_gen.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Brightness as actually sent to the device: gated by power, scaled by
+    /// the idle-dim factor.
+    pub fn effective_brightness(&self) -> u8 {
+        if !self.power.load(Ordering::Relaxed) {
+            return 0;
+        }
+        scale8(
+            self.brightness.load(Ordering::Relaxed),
+            self.idle_scale.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn set_calibration(&self, cal: Calibration) {
+        let mut guard = self.calibration.lock().unwrap();
+        if *guard != cal {
+            *guard = cal;
+            self.calibration_gen.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn current_calibration(&self) -> Calibration {
+        *self.calibration.lock().unwrap()
     }
 }
 
@@ -249,6 +357,7 @@ fn run(
     let mut last_seen_gen: u64 = 0;
     let mut last_sent_epoch: u64 = u64::MAX;
     let mut last_sent_brightness_gen: u64 = 0;
+    let mut last_sent_calibration_gen: u64 = 0;
     let mut tick_count: u64 = 0;
     // Crossfade state: the frame we're fading *from* and when it started.
     let mut fade: Option<(Vec<[u8; 3]>, Instant)> = None;
@@ -319,12 +428,19 @@ fn run(
         // Preview for the UI at ~10fps (every 3rd tick) to keep IPC cheap.
         // The tray mirror shares the cadence but not the preview_visible
         // gate — the menu bar is exactly the place that should keep
-        // animating while the window is hidden.
+        // animating while the window is hidden. The device applies gain +
+        // orientation itself (proto ≥4), so the preview mirrors that here to
+        // stay faithful; power-off blacks it out like the darkened strip.
         if tick_count.is_multiple_of(3) {
+            let display = if shared.power.load(Ordering::Relaxed) {
+                apply_calibration(&frame, &shared.current_calibration())
+            } else {
+                vec![[0, 0, 0]; NUM_LEDS]
+            };
             if shared.preview_visible.load(Ordering::Relaxed) {
-                let _ = app.emit("engine:frame", frame_to_hex(&frame));
+                let _ = app.emit("engine:frame", frame_to_hex(&display));
             }
-            update_tray(&app, &shared, &frame, &mut tray_rgba_shown);
+            update_tray(&app, &shared, &display, &mut tray_rgba_shown);
         }
 
         if epoch != last_sent_epoch {
@@ -334,12 +450,28 @@ fn run(
             // brightness_gen starts at 1 and only increments, so 0 forces a
             // resend that retries every tick until the send is accepted.
             last_sent_brightness_gen = 0;
+            // Calibration is RAM-only on the device, so a reconnect (or a
+            // software replug) resets it — re-send it too.
+            last_sent_calibration_gen = 0;
         }
         let brightness_gen = shared.brightness_gen.load(Ordering::Relaxed);
         if brightness_gen != last_sent_brightness_gen {
-            let value = shared.brightness.load(Ordering::Relaxed);
+            let value = shared.effective_brightness();
             if device_tx.try_send(DeviceMsg::Brightness(value)).is_ok() {
                 last_sent_brightness_gen = brightness_gen;
+            }
+        }
+        let calibration_gen = shared.calibration_gen.load(Ordering::Relaxed);
+        if calibration_gen != last_sent_calibration_gen {
+            let cal = shared.current_calibration();
+            if device_tx
+                .try_send(DeviceMsg::Calibrate {
+                    gain: cal.gain,
+                    reversed: cal.reversed,
+                })
+                .is_ok()
+            {
+                last_sent_calibration_gen = calibration_gen;
             }
         }
 
@@ -430,13 +562,12 @@ fn update_tray(
     frame: &[[u8; 3]],
     shown: &mut Option<Vec<u8>>,
 ) {
-    let desired = if shared.tray_preview.load(Ordering::Relaxed)
-        && frame.iter().any(|px| *px != [0, 0, 0])
-    {
-        Some(tray_rgba(frame))
-    } else {
-        None
-    };
+    let desired =
+        if shared.tray_preview.load(Ordering::Relaxed) && frame.iter().any(|px| *px != [0, 0, 0]) {
+            Some(tray_rgba(frame))
+        } else {
+            None
+        };
     // The tray may not be built yet during startup — leave `shown` untouched
     // so the next tick retries instead of believing the icon was painted.
     let Some(tray) = app.tray_by_id("main") else {
@@ -714,6 +845,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn calibration_gain_is_identity_at_full_and_reversal_flips_order() {
+        let frame = vec![[10, 20, 30], [40, 50, 60], [70, 80, 90]];
+        // Full gain, no reversal: unchanged (scale8 is fixed-point identity
+        // at 255, matching the firmware).
+        let same = apply_calibration(&frame, &Calibration::default());
+        assert_eq!(same, frame);
+        // Reversal flips the strip; half-gain on green halves that channel.
+        let cal = Calibration {
+            gain: [255, 128, 255],
+            reversed: true,
+        };
+        let out = apply_calibration(&frame, &cal);
+        assert_eq!(out[0], [70, 40, 90]); // last pixel, green scaled by ~128/256
+        assert_eq!(out[2], [10, 10, 30]);
+    }
+
+    #[test]
+    fn effective_brightness_gates_on_power_and_idle_scale() {
+        let e = EngineShared::new(200, false, true, Calibration::default());
+        assert_eq!(e.effective_brightness(), 200); // powered, no idle dim
+        e.set_idle_scale(64);
+        assert_eq!(e.effective_brightness(), 50); // ~25%
+        e.set_power(false);
+        assert_eq!(e.effective_brightness(), 0); // power off wins
+    }
+
+    #[test]
     fn validation_rejects_untrusted_values() {
         assert!(AnimSpec {
             effect: "shell".into(),
@@ -753,8 +911,16 @@ mod tests {
                 level: 0.5,
                 ..full.clone()
             };
-            let bright: u32 = render(&full, 0, 33).iter().flatten().map(|&c| c as u32).sum();
-            let dimmed: u32 = render(&dim, 0, 33).iter().flatten().map(|&c| c as u32).sum();
+            let bright: u32 = render(&full, 0, 33)
+                .iter()
+                .flatten()
+                .map(|&c| c as u32)
+                .sum();
+            let dimmed: u32 = render(&dim, 0, 33)
+                .iter()
+                .flatten()
+                .map(|&c| c as u32)
+                .sum();
             assert!(dimmed > 0, "{effect} went black at level 0.5");
             assert!(dimmed < bright, "{effect} did not dim");
         }

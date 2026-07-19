@@ -17,7 +17,7 @@
 #include <FastLED.h>
 
 #define FW_VERSION "0.4.0"
-#define PROTO_VERSION 3
+#define PROTO_VERSION 4
 #define NUM_LEDS 33
 #define DATA_PIN 5
 #define CLOCK_PIN 6
@@ -59,9 +59,25 @@
 // Keyframe effect: max color stops (RAM: 3 bytes each).
 #define MAX_KEYFRAMES 16
 
+// Two buffers so device calibration never compounds: effects and frames
+// render into the linear working `leds`; `present()` copies leds -> out
+// applying per-channel gain and orientation, and FastLED is bound to `out`,
+// so `out` is what's displayed. Keeping `leds` a clean linear source is what
+// lets a constant gain be re-applied every frame without accumulating — the
+// same reason FX_SPARKLE (which accumulates in `leds`) must not be scaled in
+// place. ~99 bytes for the extra buffer, well within the 32U4's 2.5KB RAM.
 CRGB leds[NUM_LEDS];
+CRGB out[NUM_LEDS];
 char lineBuf[LINE_BUF_SIZE];
 uint8_t lineLen = 0;
+
+// Proto 4: persistent device calibration (the `calibrate` command). Per-
+// channel gain is a white-balance trim (the app's R/G/B sliders); `reversed`
+// flips strip direction. Unlike `level`/`progress` these persist across
+// commands until re-set — they're device tuning, not part of an effect's
+// look — but live only in RAM, so the app re-sends them on every reconnect.
+uint8_t gainR = 255, gainG = 255, gainB = 255;
+bool reversed = false;
 
 enum Mode : uint8_t {
   MODE_EFFECT,  // running a built-in effect
@@ -120,7 +136,7 @@ void setup() {
   // frame, far more than the 60Hz loop needs, and gentle on jumper wiring.
   // APA102HD = gamma-corrected driver: burns the APA102's 5-bit per-pixel
   // brightness field for smooth dim colors; everything upstream stays linear.
-  FastLED.addLeds<APA102HD, DATA_PIN, CLOCK_PIN, BGR, DATA_RATE_MHZ(1)>(leds, NUM_LEDS);
+  FastLED.addLeds<APA102HD, DATA_PIN, CLOCK_PIN, BGR, DATA_RATE_MHZ(1)>(out, NUM_LEDS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, POWER_BUDGET_MA);
   FastLED.setBrightness(brightness);
   bootProgressBar();
@@ -150,11 +166,11 @@ void bootProgressBar() {
         leds[i] = CRGB::Black;
       }
     }
-    FastLED.show();
+    presentAndShow();
     delay(1000 / 60);
   }
   fill_solid(leds, NUM_LEDS, CRGB::White);
-  FastLED.show();
+  presentAndShow();
   delay(250);  // full-white beat before the sparkle takes over
 }
 
@@ -212,8 +228,24 @@ void loop() {
     if (mode == MODE_EFFECT) {
       renderEffect();
     }
-    FastLED.show();
+    presentAndShow();
   }
+}
+
+// Copy the linear working buffer to the FastLED-bound display buffer,
+// applying persistent calibration: per-channel gain, then orientation. Done
+// as a copy (not in place) so the constant gain never compounds across
+// frames and FX_SPARKLE's accumulation in `leds` stays untouched. Runs every
+// shown frame; at 33 LEDs it's a few hundred cheap ops.
+void presentAndShow() {
+  for (uint8_t i = 0; i < NUM_LEDS; i++) {
+    CRGB c = leds[i];
+    c.r = scale8(c.r, gainR);
+    c.g = scale8(c.g, gainG);
+    c.b = scale8(c.b, gainB);
+    out[reversed ? (NUM_LEDS - 1 - i) : i] = c;
+  }
+  FastLED.show();
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +315,19 @@ void handleLine() {
     }
     brightness = v;
     FastLED.setBrightness(brightness);
+    sendOk();
+  } else if (strcmp(cmd, "calibrate") == 0) {
+    // Persistent device tuning: per-channel gain + strip direction. Both
+    // fields optional; an omitted field keeps its current value (so the app
+    // can push either independently). Applied in present() each frame, so it
+    // covers native effects and streamed frames alike.
+    JsonArray gain = doc["gain"];
+    if (!gain.isNull() && gain.size() == 3) {
+      gainR = (uint8_t)gain[0];
+      gainG = (uint8_t)gain[1];
+      gainB = (uint8_t)gain[2];
+    }
+    reversed = doc["reversed"] | reversed;
     sendOk();
   } else {
     sendErr(F("unknown cmd"));

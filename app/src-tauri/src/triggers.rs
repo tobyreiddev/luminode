@@ -18,6 +18,7 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -27,6 +28,11 @@ use crate::events::Event;
 use crate::store::Store;
 
 pub const MANUAL_PRIORITY: i32 = i32::MAX;
+
+/// Idle-dim target: how far to pull brightness down after the inactivity
+/// window elapses (≈25% of the set brightness). Restored to full on the next
+/// activity.
+const IDLE_DIM_SCALE: u8 = 64;
 
 #[derive(Clone)]
 struct Overlay {
@@ -67,6 +73,12 @@ pub struct TriggerEngine {
     /// statusline update. In-memory only: stale-after-restart beats showing
     /// numbers from a previous day as if they were live.
     claude_usage: Mutex<Option<(f32, f32)>>,
+    /// Idle-dimming: minutes of inactivity before the strip dims (0 = never),
+    /// cached from the `idle_dim_minutes` setting so `recompute` (every 250ms)
+    /// doesn't hit the DB; and the last time anything happened (a bus event or
+    /// a user action) that should reset the dim.
+    idle_dim_minutes: AtomicU32,
+    last_activity: Mutex<Instant>,
 }
 
 struct Inner {
@@ -77,6 +89,10 @@ struct Inner {
 
 impl TriggerEngine {
     pub fn new(store: Store, engine: Arc<EngineShared>, app: tauri::AppHandle) -> Arc<Self> {
+        let idle_dim_minutes = store
+            .setting("idle_dim_minutes")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let me = Arc::new(Self {
             inner: Mutex::new(Inner {
                 overlays: Vec::new(),
@@ -87,13 +103,38 @@ impl TriggerEngine {
             engine,
             app,
             claude_usage: Mutex::new(None),
+            idle_dim_minutes: AtomicU32::new(idle_dim_minutes),
+            last_activity: Mutex::new(Instant::now()),
         });
         me.recompute();
         me
     }
 
+    /// Record that something happened (a bus event or a user action) so the
+    /// idle-dim timer resets. The following `recompute` restores full
+    /// brightness if it had dimmed.
+    fn mark_active(&self) {
+        *self.last_activity.lock().unwrap() = Instant::now();
+    }
+
+    /// User interacted (moved brightness, toggled power, etc.): reset the
+    /// idle-dim timer and reflect it immediately.
+    pub fn note_activity(&self) {
+        self.mark_active();
+        self.recompute();
+    }
+
+    /// Update the cached inactivity window (minutes; 0 = never dim).
+    pub fn set_idle_dim_minutes(&self, minutes: u32) {
+        self.idle_dim_minutes.store(minutes, Ordering::Relaxed);
+        self.note_activity();
+    }
+
     /// Called for every event on the bus.
     pub fn on_event(&self, ev: &Event) {
+        // Any event is activity: keep the strip at full brightness while
+        // things are happening. The recompute at the end restores it.
+        self.mark_active();
         if ev.source == "claude" && ev.event_type == "usage" {
             let session = ev.payload.get("session").and_then(|v| v.as_f64());
             let weekly = ev.payload.get("weekly").and_then(|v| v.as_f64());
@@ -190,6 +231,7 @@ impl TriggerEngine {
     /// manually applied animation play out and then fall away on its own
     /// (used by Apply on animations that carry their own length).
     pub fn set_manual(&self, spec: AnimSpec, expires_in: Option<Duration>) {
+        self.mark_active();
         let mut inner = self.inner.lock().unwrap();
         inner.overlays.retain(|o| o.key != "manual");
         inner.overlays.push(Overlay {
@@ -214,6 +256,7 @@ impl TriggerEngine {
 
     /// minutes == 0 clears the snooze.
     pub fn snooze(&self, minutes: u64) {
+        self.mark_active();
         self.inner.lock().unwrap().snooze_until = if minutes == 0 {
             None
         } else {
@@ -338,6 +381,17 @@ impl TriggerEngine {
             quiet_hours_active: quiet,
         };
         drop(inner);
+
+        // Idle dimming: after the configured inactivity window, pull the
+        // brightness down; full brightness returns on the next activity. Only
+        // bumps the engine's send generation on a real change, so calling it
+        // every 250ms recompute is cheap.
+        let minutes = self.idle_dim_minutes.load(Ordering::Relaxed);
+        let dim = minutes > 0
+            && self.last_activity.lock().unwrap().elapsed()
+                >= Duration::from_secs(minutes as u64 * 60);
+        self.engine
+            .set_idle_scale(if dim { IDLE_DIM_SCALE } else { 255 });
 
         self.engine.set_spec(spec);
         let _ = self.app.emit("engine:active", &state);

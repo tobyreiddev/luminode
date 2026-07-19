@@ -69,6 +69,12 @@ pub enum DeviceMsg {
     /// Update just the progress fractions of the running effect (proto 2).
     Progress(f32, f32),
     Brightness(u8),
+    /// Persistent per-channel gain + orientation (proto 4). Re-sent on every
+    /// (re)connect since the device only holds it in RAM.
+    Calibrate {
+        gain: [u8; 3],
+        reversed: bool,
+    },
     /// User picked a specific port in the UI (first-time setup with
     /// multiple candidates).
     Adopt(String),
@@ -290,9 +296,11 @@ fn handle_msg(ctx: &DeviceCtx, conn: &mut Option<Connection>, prober: &mut Probe
                 let level = spec.level.max(0.0);
                 spec.color = crate::animation::scale(spec.color, level);
                 spec.color2 = spec.color2.map(|c| crate::animation::scale(c, level));
-                spec.keyframes = spec
-                    .keyframes
-                    .map(|kf| kf.iter().map(|c| crate::animation::scale(*c, level)).collect());
+                spec.keyframes = spec.keyframes.map(|kf| {
+                    kf.iter()
+                        .map(|c| crate::animation::scale(*c, level))
+                        .collect()
+                });
                 spec.level = 1.0;
             }
             let mut cmd = serde_json::json!({
@@ -337,6 +345,24 @@ fn handle_msg(ctx: &DeviceCtx, conn: &mut Option<Connection>, prober: &mut Probe
                 conn,
                 &format!(r#"{{"cmd":"brightness","value":{value}}}"#),
             );
+        }
+        DeviceMsg::Calibrate { gain, reversed } => {
+            // Proto 4 command. Older firmware would answer `unknown cmd`
+            // (harmless, but noisy in the event log) — withhold it there.
+            let proto = ctx
+                .engine
+                .device_proto
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if proto >= 4 {
+                write_line(
+                    ctx,
+                    conn,
+                    &format!(
+                        r#"{{"cmd":"calibrate","gain":[{},{},{}],"reversed":{}}}"#,
+                        gain[0], gain[1], gain[2], reversed
+                    ),
+                );
+            }
         }
         DeviceMsg::Adopt(port_name) => {
             disconnect(ctx, conn, "switching device");

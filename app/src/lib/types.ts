@@ -101,6 +101,19 @@ export interface ActiveState {
   quietHoursActive: boolean;
 }
 
+/** App-level preferences + device calibration (mirrors commands::AppSettings). */
+export interface AppSettings {
+  power: boolean;
+  brightness: number; // 0..255, the user-set value (before the cap)
+  brightnessCap: number; // 10..255 upper bound applied on the device
+  gain: [number, number, number]; // per-channel white-balance, 0..255
+  reversed: boolean; // strip orientation (rtl)
+  idleDimMinutes: number; // 0 = never dim
+  startMinimized: boolean;
+  autostart: boolean; // launch at login
+  accent: string; // UI accent, "#rrggbb"
+}
+
 export function rgbToHex([r, g, b]: [number, number, number]): string {
   const h = (n: number) => n.toString(16).padStart(2, "0");
   return `#${h(r)}${h(g)}${h(b)}`;
