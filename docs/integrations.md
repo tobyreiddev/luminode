@@ -114,6 +114,13 @@ right, each colored green → amber → red by utilization. The gauge renders
 from the last usage event received, so it's empty until Claude Code's
 statusline first reports in after app start.
 
+With several Claude Code sessions open (all sharing the one statusline
+command), the gauge follows the session you most recently prompted in —
+each `claude/active` re-points it — so an idle background session, possibly
+on a different account, can't overwrite your live numbers. The bridge keys
+its "only emit on change" state per session (`claude-usage-<id>.last`) so
+concurrent sessions don't thrash each other's last-seen figures.
+
 ## Planned — implementation notes
 
 Common requirements:

@@ -73,6 +73,12 @@ pub struct TriggerEngine {
     /// statusline update. In-memory only: stale-after-restart beats showing
     /// numbers from a previous day as if they were live.
     claude_usage: Mutex<Option<(f32, f32)>>,
+    /// session_id of the most recently active Claude Code session — the one you
+    /// last prompted in (set on each claude/active). The usage gauge follows
+    /// this session only, so an idle background session on a different account
+    /// can't clobber the live numbers. None until the first prompt after start,
+    /// during which any session's usage is accepted.
+    active_claude_session: Mutex<Option<String>>,
     /// Idle-dimming: minutes of inactivity before the strip dims (0 = never),
     /// cached from the `idle_dim_minutes` setting so `recompute` (every 250ms)
     /// doesn't hit the DB; and the last time anything happened (a bus event or
@@ -103,6 +109,7 @@ impl TriggerEngine {
             engine,
             app,
             claude_usage: Mutex::new(None),
+            active_claude_session: Mutex::new(None),
             idle_dim_minutes: AtomicU32::new(idle_dim_minutes),
             last_activity: Mutex::new(Instant::now()),
         });
@@ -135,14 +142,33 @@ impl TriggerEngine {
         // Any event is activity: keep the strip at full brightness while
         // things are happening. The recompute at the end restores it.
         self.mark_active();
+        if ev.source == "claude" && ev.event_type == "active" {
+            // Whichever session just took a prompt becomes the one the usage
+            // gauge follows. Prompts without a session_id (older bridge) leave
+            // the current owner in place rather than un-pinning it.
+            if let Some(sid) = ev.payload.get("session_id").and_then(|v| v.as_str()) {
+                *self.active_claude_session.lock().unwrap() = Some(sid.to_string());
+            }
+        }
         if ev.source == "claude" && ev.event_type == "usage" {
-            let session = ev.payload.get("session").and_then(|v| v.as_f64());
-            let weekly = ev.payload.get("weekly").and_then(|v| v.as_f64());
-            if session.is_some() || weekly.is_some() {
-                *self.claude_usage.lock().unwrap() = Some((
-                    (session.unwrap_or(0.0) / 100.0) as f32,
-                    (weekly.unwrap_or(0.0) / 100.0) as f32,
-                ));
+            // Only the active session drives the gauge. With several sessions
+            // open (possibly on different accounts), this stops an idle one
+            // from yanking the strip back to its stale numbers. Before the
+            // first prompt (owner still None), accept any session so the gauge
+            // isn't blank at startup.
+            let owner = self.active_claude_session.lock().unwrap();
+            let from = ev.payload.get("session_id").and_then(|v| v.as_str());
+            let owned = usage_belongs_to_active(owner.as_deref(), from);
+            drop(owner);
+            if owned {
+                let session = ev.payload.get("session").and_then(|v| v.as_f64());
+                let weekly = ev.payload.get("weekly").and_then(|v| v.as_f64());
+                if session.is_some() || weekly.is_some() {
+                    *self.claude_usage.lock().unwrap() = Some((
+                        (session.unwrap_or(0.0) / 100.0) as f32,
+                        (weekly.unwrap_or(0.0) / 100.0) as f32,
+                    ));
+                }
             }
             // Falls through: the recompute below refreshes the idle bar,
             // and any user trigger on claude/usage still gets its shot.
@@ -439,6 +465,18 @@ fn payload_matches(ev: &Event, policy: &crate::store::TriggerPolicy) -> bool {
 
 /// Bar color for a usage fraction: green while comfortable, amber past 60%,
 /// red as it approaches the cap. Continuous, so the drift is visible.
+/// Whether a claude/usage event should drive the idle gauge, given the
+/// currently-active session. The active session (the one last prompted in)
+/// owns the gauge; other sessions are ignored so an idle one can't overwrite
+/// the live numbers. Until a session is pinned (owner None) or when either
+/// side lacks a session_id (older bridge), the event is accepted.
+fn usage_belongs_to_active(active: Option<&str>, from: Option<&str>) -> bool {
+    match (active, from) {
+        (Some(active), Some(sid)) => active == sid,
+        _ => true,
+    }
+}
+
 fn usage_color(fraction: f32) -> [u8; 3] {
     const GREEN: [u8; 3] = [20, 200, 90];
     const AMBER: [u8; 3] = [255, 160, 0];
@@ -482,5 +520,18 @@ mod tests {
             ..TriggerPolicy::default()
         };
         assert!(!payload_matches(&event, &policy));
+    }
+
+    #[test]
+    fn usage_gauge_follows_only_the_active_session() {
+        // The active session's own usage drives the gauge.
+        assert!(usage_belongs_to_active(Some("A"), Some("A")));
+        // An idle session on a different account cannot.
+        assert!(!usage_belongs_to_active(Some("A"), Some("B")));
+        // Before any prompt, or from an older bridge without a session_id,
+        // accept the event so the gauge isn't blank.
+        assert!(usage_belongs_to_active(None, Some("B")));
+        assert!(usage_belongs_to_active(Some("A"), None));
+        assert!(usage_belongs_to_active(None, None));
     }
 }

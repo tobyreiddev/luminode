@@ -156,13 +156,19 @@ fn claude_bridge() -> ! {
         exit(0);
     };
 
+    // Tag every claude event with its session so the app can follow the
+    // session you last prompted in and ignore idle ones (see triggers.rs).
+    let sid_payload = || match v.get("session_id").and_then(|s| s.as_str()) {
+        Some(s) => serde_json::json!({ "session_id": s }),
+        None => serde_json::Value::Null,
+    };
     if let Some(hook) = v.get("hook_event_name").and_then(|h| h.as_str()) {
         match hook {
             "UserPromptSubmit" => {
-                send_from("claude", "active", serde_json::Value::Null);
+                send_from("claude", "active", sid_payload());
             }
             "Stop" | "SessionEnd" => {
-                send_from("claude", "stopped", serde_json::Value::Null);
+                send_from("claude", "stopped", sid_payload());
             }
             _ => {}
         }
@@ -197,7 +203,16 @@ fn claude_bridge() -> ! {
             session.map(|p| p.round() as i64).unwrap_or(-1),
             weekly.map(|p| p.round() as i64).unwrap_or(-1)
         );
-        let state_file = socket_path().with_file_name("claude-usage.last");
+        // Per-session fingerprint: with several sessions sharing this one
+        // command, a single shared file made them fight — each overwriting the
+        // other's last-seen numbers, so both re-emitted on every tick. Keyed by
+        // session_id they only speak up when their own numbers actually move.
+        let session_id = v.get("session_id").and_then(|s| s.as_str());
+        let state_name = match session_id {
+            Some(s) => format!("claude-usage-{s}.last"),
+            None => "claude-usage.last".to_string(),
+        };
+        let state_file = socket_path().with_file_name(state_name);
         if std::fs::read_to_string(&state_file).ok().as_deref() != Some(&fingerprint) {
             let mut payload = serde_json::Map::new();
             if let Some(p) = session {
@@ -205,6 +220,9 @@ fn claude_bridge() -> ! {
             }
             if let Some(p) = weekly {
                 payload.insert("weekly".into(), p.into());
+            }
+            if let Some(s) = session_id {
+                payload.insert("session_id".into(), s.into());
             }
             if send_from("claude", "usage", serde_json::Value::Object(payload)) {
                 let _ = std::fs::write(&state_file, fingerprint);
