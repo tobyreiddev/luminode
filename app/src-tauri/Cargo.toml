@@ -1,6 +1,6 @@
 [package]
 name = "luminode"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ambient LED status app driving an APA102 strip over an Arduino Micro"
 authors = ["Toby Reid"]
 edition = "2021"

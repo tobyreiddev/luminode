@@ -1,6 +1,6 @@
 [package]
 name = "lightctl"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI companion for Luminode: emit events (progress, command results) to the desktop app over a unix socket"
 edition = "2021"
 

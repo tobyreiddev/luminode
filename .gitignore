@@ -9,5 +9,8 @@ app/.svelte-kit/
 # Tauri generated schemas
 app/src-tauri/gen/
 
+# Packaged release artifacts
+/dist/
+
 # OS
 .DS_Store
