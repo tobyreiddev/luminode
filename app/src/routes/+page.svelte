@@ -726,6 +726,13 @@
       <div class="conn-detail">
         {#if status.connected}{status.port} · proto {status.protocolVersion} · {status.ledCount} LEDs{:else}searching for device…{/if}
       </div>
+      <div class="sidebar-brightness">
+        <div class="card-head">
+          <span class="label">BRIGHTNESS</span>
+          <span class="value">{pct(brightness)}%</span>
+        </div>
+        <input class="slider" type="range" min="0" max={brightnessCap} step="1" bind:value={brightness} onchange={onBrightness} style="--fill:{pct(brightness, brightnessCap)}%" />
+      </div>
     </div>
   </aside>
 
@@ -774,7 +781,6 @@
             <span class="active-dot"></span>
             <strong>{active.activeName}</strong>
           </div>
-          <div class="bar"><div class="bar-fill" style="width:{Math.round(litFraction * 100)}%"></div></div>
           <div class="row between">
             <span class="mono dim">{Math.round(litFraction * 100)}% · {winningOverlay ? rulePatternFromKey(winningOverlay.key) : "idle"} pattern{winningOverlay?.expiresInMs != null ? ` · ${Math.ceil(winningOverlay.expiresInMs / 1000)}s left` : ""}</span>
             {#if active.snoozedUntilMs}
@@ -783,14 +789,6 @@
               <button class="pill-btn" onclick={() => snooze(30)}>Snooze 30m</button>
             {/if}
           </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head">
-            <span class="label">BRIGHTNESS</span>
-            <span class="value">{pct(brightness)}%</span>
-          </div>
-          <input class="slider" type="range" min="0" max={brightnessCap} step="1" bind:value={brightness} onchange={onBrightness} style="--fill:{pct(brightness, brightnessCap)}%" />
         </div>
 
         <div class="card">
@@ -1290,6 +1288,7 @@
   .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
   .conn-dot.ok { background: var(--success); }
   .conn-detail { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; color: var(--text-faint); padding-left: 15px; }
+  .sidebar-brightness { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 
   /* ============================ content ============================ */
   .content { flex: 1; overflow-y: auto; padding: 32px 40px; }
