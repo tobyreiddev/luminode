@@ -7,10 +7,7 @@
 
 # Luminode
 
-Ambient LED status light: a Tauri desktop app that drives a 33-LED APA102
-strip through an Arduino Micro, turning events from your digital life —
-CLI progress, finished builds, screen lock, later calendars and Slack —
-into light.
+Ambient LED status light: a Tauri desktop app that drives a 33‑LED APA102 strip via an Arduino Micro, giving you subtle visual cues for what’s happening—when Claude or Codex is working or finished, whether a CLI command succeeds or fails, when your screen locks, while you’re idle, and a bright light when on a video call.
 
 ```
 ┌─────────────────────────────┐
@@ -59,11 +56,11 @@ Arduino Micro → APA102 strip (APA102 is clocked SPI, so **two** signal wires,
 unlike WS2812). Pins are `DATA_PIN`/`CLOCK_PIN` in the sketch — software SPI,
 plenty fast at 33 LEDs:
 
-| APA102     | Arduino Micro                                                                                 |
-| ---------- | --------------------------------------------------------------------------------------------- |
-| DATA (DI)  | digital 5 (`DATA_PIN`)                                                                        |
-| CLOCK (CI) | digital 6 (`CLOCK_PIN`)                                                                       |
-| GND        | GND (common with the supply)                                                                  |
+| APA102     | Arduino Micro                                                                                                                                                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DATA (DI)  | digital 5 (`DATA_PIN`)                                                                                                                                                                                                     |
+| CLOCK (CI) | digital 6 (`CLOCK_PIN`)                                                                                                                                                                                                    |
+| GND        | GND (common with the supply)                                                                                                                                                                                               |
 | 5V         | 5 V supply — USB bus power works out of the box: firmware caps total draw at `POWER_BUDGET_MA` (450 mA). Full white at full brightness wants ≈ 2 A, so for that, use an external supply and raise the budget in the sketch |
 
 ### Firmware compatibility and updates
@@ -221,7 +218,7 @@ when this fires. If you're ever debugging by hand, the same remedy is
   exists, which is the point).
 - **Export / Import** — Integrations panel → Config. One JSON file with
   animations, triggers, schedules, and the idle choice; references are by
-  *name*, so it restores onto a fresh machine. Import upserts by name and
+  _name_, so it restores onto a fresh machine. Import upserts by name and
   never deletes.
 - **Simulate an event** — fire any {source, type, payload} at the trigger
   engine without needing the real integration.
@@ -240,7 +237,7 @@ lightctl codex                # stdin bridge for Codex hooks (see Integrations)
 ## Integrations
 
 Full catalog and module conventions: `docs/integrations.md`. Everything
-below emits events onto the bus; what the lights *do* is always a trigger
+below emits events onto the bus; what the lights _do_ is always a trigger
 you can edit, reorder, or switch off in the UI.
 
 ### Codex (manual setup required)
@@ -319,7 +316,7 @@ uninstall.
 
 1. [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** →
    From scratch → any name, your workspace.
-2. **OAuth & Permissions** → *User Token Scopes* (not Bot!) → add
+2. **OAuth & Permissions** → _User Token Scopes_ (not Bot!) → add
    `users.profile:read` and `users:read`.
 3. **Install to Workspace**, approve, copy the **User OAuth Token**
    (`xoxp-…`).
@@ -329,7 +326,7 @@ uninstall.
 Polls every 30 s and emits transitions only: `slack/status_set
 {text, emoji}`, `slack/status_cleared`, `slack/presence_active`,
 `slack/presence_away`. Add triggers for them in the UI. Caveat: triggers
-match source+type, not payload contents, so `status_set` fires for *any*
+match source+type, not payload contents, so `status_set` fires for _any_
 status — payload matching is a known gap (see roadmap).
 
 ### Calendar (manual setup required — no OAuth!)
@@ -359,7 +356,7 @@ Mac's local timezone — correct whenever calendar TZ = machine TZ.
 
 `sources/call.rs` polls CoreAudio ("default input device running
 somewhere") and CoreMediaIO (any camera running) every 2 s — true whenever
-*any* app has the mic **or a camera** open, so camera-only meetings with
+_any_ app has the mic **or a camera** open, so camera-only meetings with
 the mic muted at OS level still count. No mic/camera permission needed
 (nothing is captured). Emits `system/call_started` / `system/call_ended`;
 seeded trigger shows Meeting Red. Voice memos count as calls — flip the
@@ -368,7 +365,7 @@ trigger's toggle if that bothers you.
 ### Display sleep (no setup)
 
 `sources/display.rs` polls `CGDisplayIsAsleep` every 5 s — distinct from
-screen *lock*, since a display can sleep without locking. Emits
+screen _lock_, since a display can sleep without locking. Emits
 `system/display_slept` / `system/display_woke`; seeded trigger turns the
 strip off until the display wakes.
 
@@ -380,7 +377,7 @@ Explicit instructions for the remaining catalog; each is a module in
 
 - **MS Teams presence** — portal.azure.com → App registrations → New
   (personal + work accounts) → API permissions → Microsoft Graph →
-  delegated `Presence.Read` → enable *Allow public client flows* for the
+  delegated `Presence.Read` → enable _Allow public client flows_ for the
   device-code flow. Module: device-code sign-in, poll
   `graph.microsoft.com/v1.0/me/presence` ~30 s, emit
   `teams/available|busy|do_not_disturb|away` on change. Token in the
