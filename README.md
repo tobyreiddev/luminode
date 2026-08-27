@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/static/brand/luminode-mark-inverse.svg">
+    <img src="app/static/brand/luminode-mark.svg" alt="Luminode" width="96" height="96">
+  </picture>
+</p>
+
 # Luminode
 
 Ambient LED status light: a Tauri desktop app that drives a 33-LED APA102
@@ -30,6 +37,8 @@ into light.
 | `cli/lightctl/`        | Terminal companion: pipe progress/command results into the app                   |
 | `docs/protocol.md`     | Serial protocol spec                                                             |
 | `docs/integrations.md` | Event-source catalog: what exists, how to add more                               |
+| `docs/brand.md`        | Mark, palette and wordmark; how the icons are generated                          |
+| `tools/brand_assets.py`| Regenerates every logo, icon and the in-app mark component                       |
 
 Rust code is one cargo workspace rooted here (`Cargo.toml`); the firmware
 builds with `arduino-cli`, not cargo.

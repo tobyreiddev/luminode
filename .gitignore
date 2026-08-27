@@ -12,5 +12,8 @@ app/src-tauri/gen/
 # Packaged release artifacts
 /dist/
 
+# Python (tools/)
+__pycache__/
+
 # OS
 .DS_Store

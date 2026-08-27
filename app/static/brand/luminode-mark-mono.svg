@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Luminode">
+  <line x1="32.00" y1="20.00" x2="32.00" y2="10.20" stroke="#7B1D2E" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="32.00" cy="5.50" r="3.1" fill="#F7F9FA" stroke="#7B1D2E" stroke-width="2.08"/>
+  <line x1="42.39" y1="26.00" x2="50.88" y2="21.10" stroke="#7B1D2E" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="54.95" cy="18.75" r="3.1" fill="#F7F9FA" stroke="#7B1D2E" stroke-width="2.08"/>
+  <line x1="42.39" y1="38.00" x2="50.88" y2="42.90" stroke="#7B1D2E" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="54.95" cy="45.25" r="3.1" fill="#F7F9FA" stroke="#7B1D2E" stroke-width="2.08"/>
+  <line x1="32.00" y1="44.00" x2="32.00" y2="53.80" stroke="#7B1D2E" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="32.00" cy="58.50" r="3.1" fill="#F7F9FA" stroke="#7B1D2E" stroke-width="2.08"/>
+  <line x1="21.61" y1="38.00" x2="13.12" y2="42.90" stroke="#7B1D2E" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="9.05" cy="45.25" r="3.1" fill="#F7F9FA" stroke="#7B1D2E" stroke-width="2.08"/>
+  <line x1="21.61" y1="26.00" x2="13.12" y2="21.10" stroke="#7B1D2E" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="9.05" cy="18.75" r="3.1" fill="#F7F9FA" stroke="#7B1D2E" stroke-width="2.08"/>
+  <circle cx="32" cy="32" r="6.5" fill="#7B1D2E"/>
+</svg>
