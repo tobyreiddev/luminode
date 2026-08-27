@@ -73,9 +73,6 @@
   let triggers = $state<Trigger[]>([]);
   let profiles = $state<string[]>(["Default"]);
   let activeProfile = $state("Default");
-  let quietEnabled = $state(false);
-  let quietStart = $state("22:00");
-  let quietEnd = $state("07:00");
   let conditionValue = $state("");
   let schedules = $state<Schedule[]>([]);
   // Animation id, or "claude_usage" for the live session/weekly gauge.
@@ -468,17 +465,6 @@
     if (!value.trim()) return "";
     try { return JSON.parse(value); } catch { return value; }
   }
-  async function changeProfile() {
-    await invoke("set_active_profile", { profile: activeProfile });
-    active = await invoke("get_active");
-    notify(`Scene changed to ${activeProfile}`);
-  }
-  async function saveQuietHours() {
-    try {
-      await invoke("set_quiet_hours", { enabled: quietEnabled, start: quietStart, end: quietEnd });
-      notify(quietEnabled ? `Quiet hours saved (${quietStart}–${quietEnd})` : "Quiet hours disabled");
-    } catch (e) { reportError(e); }
-  }
   async function toggleTrigger(trigger: Trigger) {
     await invoke("save_trigger", { trigger: { ...trigger, enabled: !trigger.enabled } });
     triggers = await invoke("list_triggers");
@@ -674,8 +660,6 @@
         triggers = await invoke("list_triggers");
         profiles = await invoke("list_profiles");
         activeProfile = await invoke("get_active_profile");
-        const quiet = await invoke<{ enabled: boolean; start: string; end: string }>("get_quiet_hours");
-        quietEnabled = quiet.enabled; quietStart = quiet.start; quietEnd = quiet.end;
         schedules = await invoke("list_schedules");
         brightness = await invoke("get_brightness");
         await loadSettings();
@@ -816,28 +800,6 @@
           <span class="subtitle">Map events to light behavior</span>
         </div>
 
-        <div class="card">
-          <div class="grid2">
-            <label class="field">
-              <span class="label">Scene</span>
-              <div class="row">
-                <input list="profiles" bind:value={activeProfile} />
-                <datalist id="profiles">{#each profiles as p}<option value={p}></option>{/each}</datalist>
-                <button onclick={changeProfile}>Activate</button>
-              </div>
-            </label>
-            <div class="field">
-              <span class="label">Quiet hours</span>
-              <div class="row">
-                <Toggle size="sm" checked={quietEnabled} onchange={() => { quietEnabled = !quietEnabled; saveQuietHours(); }} label="Quiet hours" />
-                <input aria-label="Quiet hours start" type="time" bind:value={quietStart} onchange={saveQuietHours} />
-                <span class="dim">to</span>
-                <input aria-label="Quiet hours end" type="time" bind:value={quietEnd} onchange={saveQuietHours} />
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div class="section-head">
           <h2>Triggers</h2>
           <button class="pill-btn" onclick={addRule}>+ Add rule</button>
@@ -845,6 +807,7 @@
         <p class="hint">Drag to reorder — higher wins when several fire at once. Expand a rule to edit it.</p>
 
         <datalist id="known-sources"><option value="cli">lightctl / terminal</option><option value="system">screen lock etc.</option><option value="device">the strip's connection</option></datalist>
+        <datalist id="profiles">{#each profiles as p}<option value={p}></option>{/each}</datalist>
 
         {#snippet ruleEditor()}
           {#if editingTrigger}
