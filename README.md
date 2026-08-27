@@ -25,6 +25,38 @@ Ambient LED status light: a Tauri desktop app that drives a 33‑LED APA102 stri
         Arduino Micro + APA102×33 (firmware/)
 ```
 
+## The app
+
+The **Overview** tab shows what the strip is doing and why. Here Claude starts work —
+an orange chase at 15% — and the rule fires again on completion, flashing the strip green:
+
+![Luminode Overview tab in motion: the live preview runs an orange chase captioned Claude working, then switches to a green flash captioned Claude finished](docs/images/claude-working.gif)
+
+The same events on the actual hardware — 33 APA102 LEDs along the top of a monitor:
+
+![The physical LED strip mounted above a monitor, cycling through pink, green and blue effects](docs/images/light-strip.gif)
+
+**Rules** map events to light behaviour. Each rule is `on <event> [until <event>] → <animation>`;
+drag to reorder, and when several match at once the highest one wins.
+
+![Luminode Rules tab: a reorderable list of triggers mapping events such as cli/run_failed, claude/active and system/screen_locked to animations, with an idle fallback at the bottom](docs/images/rules.png)
+
+**Animations** are the effects those rules point at — the built-in set plus anything you
+save yourself. Manual control at the bottom drives the strip directly and can save the
+current effect as a new animation.
+
+![Luminode Animations section: built-in animations including Claude Working, Failure Flash and Idle Rainbow, each with a colour preview and Apply button, above a manual control panel](docs/images/animations.png)
+
+**Devices** picks the serial port and stores per-strip calibration — a brightness cap and
+per-channel gain, re-sent on every connect so colours match across effects.
+
+![Luminode Devices tab: serial port and orientation selectors, brightness cap and red/green/blue gain sliders, and a known-devices list showing firmware version and LED count](docs/images/devices.png)
+
+**Settings** covers startup, theme and accent, event-source integrations (calendar, Slack),
+and config export/import.
+
+![Luminode Settings tab: launch-at-login and start-minimized toggles, theme and accent pickers, calendar and Slack integration fields, and config export/import buttons](docs/images/settings.png)
+
 ## Repository layout
 
 | Path                   | What                                                                             |
