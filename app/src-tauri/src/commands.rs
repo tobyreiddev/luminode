@@ -315,7 +315,7 @@ pub fn set_idle_dim(state: State<AppState>, minutes: u32) {
     state.triggers.set_idle_dim_minutes(minutes);
 }
 
-/// UI accent color (hex like "#5ec8f2"). Purely cosmetic; persisted so it
+/// UI accent color (hex like "#E8A33D"). Purely cosmetic; persisted so it
 /// survives restarts.
 #[tauri::command]
 pub fn set_accent(state: State<AppState>, hex: String) -> Result<(), String> {
@@ -396,7 +396,8 @@ pub fn get_app_settings(app: tauri::AppHandle, state: State<AppState>) -> AppSet
         accent: state
             .store
             .setting("accent")
-            .unwrap_or_else(|| "#5ec8f2".into()),
+            // Brand amber; matches the lit core of the mark.
+            .unwrap_or_else(|| "#E8A33D".into()),
     }
 }
 

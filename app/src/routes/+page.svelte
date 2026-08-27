@@ -4,6 +4,7 @@
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import AnimThumb from "$lib/AnimThumb.svelte";
+  import Logo from "$lib/Logo.svelte";
   import Toggle from "$lib/Toggle.svelte";
   import {
     rgbToHex,
@@ -38,7 +39,7 @@
     keyframes: "Loop speed",
   };
   // Curated palette for the accent picker.
-  const RULE_PALETTE = ["#5ec8f2", "#4ade80", "#f5a94e", "#f87171", "#c084fc", "#f472b6"];
+  const RULE_PALETTE = ["#E8A33D", "#5ec8f2", "#4ade80", "#f87171", "#c084fc", "#f472b6"];
 
   type View = "overview" | "rules" | "devices" | "settings";
   let view = $state<View>("overview");
@@ -88,7 +89,7 @@
   let idleDimMinutes = $state(0);
   let startMinimized = $state(false);
   let autostart = $state(false);
-  let accent = $state("#5ec8f2");
+  let accent = $state("#E8A33D");
 
   // --- manual control form ---
   let effect = $state("solid");
@@ -705,8 +706,8 @@
   <aside class="sidebar">
     <div>
       <div class="brand">
-        <div class="logo"><span class="logo-dot"></span></div>
-        <span class="brand-name">Luminode</span>
+        <Logo size={30} />
+        <span class="wordmark">lumi<span class="dim-weight">node</span></span>
       </div>
       <nav aria-label="Sections">
         {#each NAV as item}
@@ -1165,7 +1166,10 @@
           </ul>
         </details>
 
-        <div class="about"><span class="dim">Luminode {status.fwVersion ? `· firmware ${status.fwVersion}` : ""}</span></div>
+        <div class="about">
+          <Logo size={20} title="" />
+          <span class="dim">Luminode {status.fwVersion ? `· firmware ${status.fwVersion}` : ""}</span>
+        </div>
       </div>
     {/if}
   </main>
@@ -1176,6 +1180,17 @@
 {/if}
 
 <style>
+  /* ============================ brand ============================ */
+  /* Wordmark only — UI text stays on the system stack. Vendored rather than
+     linked so it survives the Tauri CSP and an offline launch. */
+  @font-face {
+    font-family: "Plus Jakarta Sans";
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url("/brand/fonts/PlusJakartaSans-latin.woff2") format("woff2");
+  }
+
   /* ============================ design tokens ============================ */
   :global(body) {
     --bg: oklch(0.13 0.005 260);
@@ -1189,8 +1204,13 @@
     --muted: oklch(0.62 0.008 260);
     --text-dim: oklch(0.5 0.008 260);
     --text-faint: oklch(0.45 0.01 260);
-    --accent: #5ec8f2;
-    --on-accent: #0a0a0a;
+    --accent: #E8A33D;
+    --on-accent: #171C1F;
+    /* Mark colours. The terminals are hollow, so --mark-bg has to track the
+       surface the mark sits on (the sidebar) rather than the page. */
+    --mark-ink: #EDE7E2;
+    --mark-lit: #F0B054;
+    --mark-bg: var(--sidebar-bg);
     --success: oklch(0.72 0.17 150);
     --toggle-off: oklch(0.28 0.006 260);
     --danger: #f87171;
@@ -1215,6 +1235,8 @@
     --text-dim: oklch(0.54 0.01 260);
     --text-faint: oklch(0.6 0.01 260);
     --on-accent: #ffffff;
+    --mark-ink: #7B1D2E;
+    --mark-lit: #E8A33D;
     --toggle-off: oklch(0.82 0.008 260);
     --input-bg: oklch(0.97 0.004 260);
     --track: oklch(0.88 0.006 260);
@@ -1233,6 +1255,8 @@
       --text-dim: oklch(0.54 0.01 260);
       --text-faint: oklch(0.6 0.01 260);
       --on-accent: #ffffff;
+      --mark-ink: #7B1D2E;
+      --mark-lit: #E8A33D;
       --toggle-off: oklch(0.82 0.008 260);
     }
   }
@@ -1247,9 +1271,13 @@
     padding: 20px 14px;
   }
   .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 22px; }
-  .logo { width: 26px; height: 26px; border-radius: 8px; background: var(--accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.9); }
-  .brand-name { font-size: 15px; font-weight: 700; }
+  /* The wordmark splits weight across the two halves: "lumi" solid, "node"
+     hairline. Sizes below ~15px lose the contrast — use the mark alone there. */
+  .wordmark {
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 19px; font-weight: 800; letter-spacing: -0.045em; line-height: 1;
+  }
+  .wordmark .dim-weight { font-weight: 200; }
   nav { display: flex; flex-direction: column; gap: 2px; }
   .nav-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; color: var(--muted); }
   .nav-row.selected { background: var(--surface-raised); color: var(--text); }
@@ -1350,7 +1378,7 @@
   .catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 10px; }
   .catalog-grid article { display: flex; flex-direction: column; gap: 3px; padding: 10px; background: var(--surface-raised); border-radius: 8px; }
   .advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-  .about { text-align: center; font-size: 12px; padding: 8px; }
+  .about { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; padding: 8px; --mark-bg: var(--window-bg); }
 
   /* fields + form controls */
   .field { display: flex; flex-direction: column; gap: 6px; }
