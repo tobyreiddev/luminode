@@ -21,7 +21,10 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order keeps a user's key order intact when we rewrite their
+# Claude Code settings.json (hooks.rs) — an install button must not reshuffle
+# a config file it only meant to add three keys to.
+serde_json = { version = "1", features = ["preserve_order"] }
 serialport = "4"
 # `bundled` compiles SQLite from source so there is no system dependency.
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -32,6 +35,9 @@ tokio = { version = "1", features = ["net", "time", "io-util", "sync", "rt", "ma
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # OS keychain for integration secrets (secrets policy: never SQLite/JSON).
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+# Codex hooks live in ~/.codex/config.toml; toml_edit rewrites just the table
+# we touch and leaves the rest of the file (comments included) byte-identical.
+toml_edit = "0.25"
 # ICS timestamp parsing for the calendar source.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 

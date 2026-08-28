@@ -49,8 +49,8 @@ per-channel gain, re-sent on every connect so colours match across effects.
 
 ![Luminode Devices tab: serial port and orientation selectors, brightness cap and red/green/blue gain sliders, and a known-devices list showing firmware version and LED count](docs/images/devices.png)
 
-**Settings** covers startup, theme and accent, event-source integrations (calendar, Slack),
-and config export/import.
+**Settings** covers startup, theme and accent, Claude Code/Codex hook setup,
+event-source integrations (calendar, Slack), and config export/import.
 
 ![Luminode Settings tab: launch-at-login and start-minimized toggles, theme and accent pickers, calendar and Slack integration fields, and config export/import buttons](docs/images/settings.png)
 
@@ -269,15 +269,20 @@ Full catalog and module conventions: `docs/integrations.md`. Everything
 below emits events onto the bus; what the lights _do_ is always a trigger
 you can edit, reorder, or switch off in the UI.
 
-### Codex (manual setup required)
+### Codex (set up from Settings)
+
+**Settings → Agent hooks** shows whether the hooks are wired and writes them
+for you; the rest of this section is what that button does, for anyone who
+would rather edit the file.
 
 `lightctl codex` turns supported Codex lifecycle hooks into
 `codex/active` and `codex/stopped` events. Luminode seeds a blue breathing
 **Codex Working** animation, a working trigger that clears on Stop, and a
 green finished flash.
 
-Build `lightctl`, then add these command hooks to `~/.codex/config.toml`.
-Replace the command path if your checkout lives elsewhere:
+Build `lightctl`, then add these command hooks to `~/.codex/config.toml`
+(Codex will ask you to trust them on next launch). Replace the command path
+if your checkout lives elsewhere:
 
 ```toml
 [[hooks.UserPromptSubmit]]
@@ -299,7 +304,13 @@ Codex sends hook JSON to the command on stdin. The bridge always exits zero,
 so an unavailable Luminode app cannot interrupt a Codex turn. Restart Codex
 after changing its configuration. Remove the two hook blocks to uninstall.
 
-### Claude Code (manual setup required)
+### Claude Code (set up from Settings)
+
+**Settings → Agent hooks** reports what `~/.claude/settings.json` currently
+contains — per hook, and whether the `lightctl` it names still exists — and
+a button writes the missing entries. It only ever touches its own entries,
+backs the file up to `settings.json.luminode.bak` first, and leaves a status
+line you've already set to something else alone. Manual wiring below.
 
 `lightctl claude` reads whatever Claude Code pipes to it and tells the two
 input shapes apart on its own: **hook** JSON becomes `claude/active`
@@ -316,8 +327,9 @@ Seeded triggers: **Claude working** (breathing clay while a turn runs),
 weekly fills violet from the right — surfaces for 15 s whenever Claude goes
 quiet).
 
-Wire it up by hand — add this to `~/.claude/settings.json` (top level,
-alongside `"model"` etc.), with the path pointing at your built binary:
+To wire it up by hand instead — add this to `~/.claude/settings.json` (top
+level, alongside `"model"` etc.), with the path pointing at your built
+binary:
 
 ```json
 "statusLine": {
@@ -484,7 +496,8 @@ Decisions made during initial implementation, 2026-07-11:
 Implemented: firmware + protocol, device lifecycle, manual control UI with
 live preview, SQLite persistence, trigger engine with drag-ordered
 priorities/expiry/snooze, `lightctl` CLI, event log & overlay debugger,
-keyframe editor v1 (whole-strip color timeline), and sources: macOS screen
+keyframe editor v1 (whole-strip color timeline), in-app setup and status for
+the Claude Code/Codex hooks, and sources: macOS screen
 lock, Claude Code (hooks + statusline bridge), Slack status/presence,
 calendar via secret ICS URL, mic-based call detection.
 

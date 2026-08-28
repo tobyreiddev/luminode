@@ -1082,6 +1082,19 @@ impl Store {
         Ok(())
     }
 
+    /// Timestamp of the most recent event from `source`, if any — the
+    /// end-to-end proof that an integration's wiring actually fires.
+    pub fn last_event_ms(&self, source: &str) -> Option<i64> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(
+            "SELECT MAX(ts_ms) FROM event_log WHERE source = ?1",
+            params![source],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
     pub fn recent_events(&self, limit: u32) -> Vec<Event> {
         let conn = self.0.lock().unwrap();
         let Ok(mut stmt) = conn.prepare(
