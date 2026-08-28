@@ -141,10 +141,8 @@ fn is_ours(command: &str, agent: &str) -> bool {
 
 /// The binary half of a `… /path/to/lightctl claude` command line.
 fn binary_of(command: &str) -> Option<String> {
-    let trimmed = command.trim();
-    let head = trimmed[..trimmed.len().saturating_sub(trimmed.split_whitespace().last()?.len())]
-        .trim()
-        .trim_matches(['"', '\'']);
+    let (head, _agent) = command.trim().rsplit_once(char::is_whitespace)?;
+    let head = head.trim().trim_matches(['"', '\'']);
     (!head.is_empty()).then(|| head.to_string())
 }
 
@@ -777,4 +775,3 @@ mod tests {
         assert_eq!(codex_status_at(&config, Some(&binary)).status, "partial");
     }
 }
-
