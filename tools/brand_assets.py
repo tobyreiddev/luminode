@@ -412,8 +412,12 @@ def main():
 
     # Raster marks for readers that do not render SVG (README on some mirrors,
     # release notes, chat previews). 2x the 96px the README displays them at.
+    # The icon carries its own dark ground, so it is the one that reads on a
+    # light and a dark page alike -- what the README header points at, since
+    # renderers without <picture> get no light/dark swap.
     for name, text in (("luminode-mark.png", svgs["luminode-mark.svg"]),
-                       ("luminode-mark-inverse.png", svgs["luminode-mark-inverse.svg"])):
+                       ("luminode-mark-inverse.png", svgs["luminode-mark-inverse.svg"]),
+                       ("luminode-icon.png", svgs["luminode-icon.svg"])):
         (BRAND / name).write_bytes(render_png(chromium, text, MARK_PNG_PX))
         print("wrote", (BRAND / name).relative_to(ROOT))
 
