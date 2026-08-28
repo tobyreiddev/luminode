@@ -7,9 +7,9 @@ change a value here and re-run to regenerate every asset at once:
 
     python3 tools/brand_assets.py
 
-Outputs land in app/static/brand (source SVGs), app/static (favicon) and
-app/src-tauri/icons (bundled application icons). Raster output needs Chromium;
-pass --svg-only to skip it.
+Outputs land in app/static/brand (source SVGs plus raster marks), app/static
+(favicon) and app/src-tauri/icons (bundled application icons). Raster output
+needs Chromium; pass --svg-only to skip it.
 """
 
 import argparse
@@ -29,6 +29,9 @@ ICONS = ROOT / "app" / "src-tauri" / "icons"
 # --- locked dial values -------------------------------------------------
 LOCKED = dict(core=6.5, inner=12.0, dist=26.5, term=3.1, sw=2.6, halo=100.0,
               alt=False, fill=False, rot=False)
+
+# Raster marks ship at 2x the 96px the README displays them at.
+MARK_PNG_PX = 192
 
 # --- palettes -----------------------------------------------------------
 LIGHT = dict(ink="#7B1D2E", lit="#E8A33D", bg="#F7F9FA")   # on the light panel
@@ -406,6 +409,13 @@ def main():
     write_icns(rendered, ICONS / "icon.icns")
     (STATIC / "favicon.png").write_bytes(rendered[128])
     print("wrote application icons")
+
+    # Raster marks for readers that do not render SVG (README on some mirrors,
+    # release notes, chat previews). 2x the 96px the README displays them at.
+    for name, text in (("luminode-mark.png", svgs["luminode-mark.svg"]),
+                       ("luminode-mark-inverse.png", svgs["luminode-mark-inverse.svg"])):
+        (BRAND / name).write_bytes(render_png(chromium, text, MARK_PNG_PX))
+        print("wrote", (BRAND / name).relative_to(ROOT))
 
 
 if __name__ == "__main__":
