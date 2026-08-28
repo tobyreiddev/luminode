@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app/static/brand/luminode-mark-inverse.png">
-    <img src="app/static/brand/luminode-mark.png" alt="Luminode" width="96" height="96">
-  </picture>
+  <img src="app/static/brand/luminode-icon.png" alt="Luminode" width="96" height="96">
 </p>
 
 # Luminode
