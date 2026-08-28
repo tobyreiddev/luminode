@@ -488,12 +488,22 @@
   }
   function onTriggerDragOver(e: DragEvent, i: number) {
     e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     if (dragIndex === null || i === dragIndex) return;
+    // Only take the slot once the pointer is past the midpoint of the card we're
+    // over. Without this an expanded card swaps back and forth under the cursor,
+    // because reordering moves a card of a different height beneath it.
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const pastMiddle = e.clientY > rect.top + rect.height / 2;
+    if (i > dragIndex ? !pastMiddle : pastMiddle) return;
     const arr = [...triggers];
     const [moved] = arr.splice(dragIndex, 1);
     arr.splice(i, 0, moved);
     triggers = arr;
     dragIndex = i;
+  }
+  function onTriggerDrop(e: DragEvent) {
+    e.preventDefault();
   }
   async function onTriggerDragEnd() {
     if (dragIndex === null) return;
@@ -827,7 +837,7 @@
           {#each triggers as t, i (t.id)}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="rule-card" class:disabled={!t.enabled} class:dragging={dragIndex === i} class:expanded={expandedRuleId === t.id}
-              draggable="true" ondragstart={(e) => onTriggerDragStart(e, i)} ondragover={(e) => onTriggerDragOver(e, i)} ondragend={onTriggerDragEnd}>
+              draggable="true" ondragstart={(e) => onTriggerDragStart(e, i)} ondragover={(e) => onTriggerDragOver(e, i)} ondrop={onTriggerDrop} ondragend={onTriggerDragEnd}>
               <div class="rule-row">
                 <span class="handle" title="Drag to reorder">⠿</span>
                 <Toggle size="sm" checked={t.enabled} onchange={() => toggleTrigger(t)} label={`Enable ${t.name}`} />
@@ -837,6 +847,10 @@
                   <div class="rule-desc dim">on {t.source}/{t.eventType}{t.clearEventType ? ` until ${t.clearEventType}` : ""} → {ruleAnim(t)?.name ?? "?"}</div>
                 </div>
                 <span class="pattern-pill">{rulePattern(t)}</span>
+                <span class="reorder-buttons">
+                  <button class="chevron" aria-label={`Move ${t.name} up`} disabled={i === 0} onclick={() => moveTrigger(i, -1)}>↑</button>
+                  <button class="chevron" aria-label={`Move ${t.name} down`} disabled={i === triggers.length - 1} onclick={() => moveTrigger(i, 1)}>↓</button>
+                </span>
                 <button class="chevron" aria-label="Edit rule" onclick={() => toggleExpandRule(t)}>{expandedRuleId === t.id ? "⌃" : "⌄"}</button>
               </div>
               {#if expandedRuleId === t.id}
@@ -1318,6 +1332,8 @@
   .rule-desc { font-size: 12px; }
   .pattern-pill { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); background: var(--surface-raised); padding: 5px 10px; border-radius: 6px; }
   .chevron { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; flex: none; }
+  .chevron:disabled { opacity: 0.3; cursor: default; }
+  .reorder-buttons { display: inline-flex; gap: 2px; flex: none; }
   .rule-expanded { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
   .swatch { width: 22px; height: 22px; border-radius: 50%; border: 0; background: var(--c); cursor: pointer; padding: 0; }
   .swatch.sel { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--c); }
