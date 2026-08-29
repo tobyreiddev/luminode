@@ -83,6 +83,30 @@ export interface IntegrationHealth {
   lastAttemptMs: number | null;
   lastSuccessMs: number | null;
 }
+/** One hook an agent config should contain (mirrors hooks::HookItem). */
+export interface HookItem {
+  key: string;
+  label: string;
+  state: "ours" | "missing" | "foreign";
+  optional: boolean;
+  command: string | null;
+}
+
+/** Claude Code / Codex hook wiring, read from the agent's own config file. */
+export interface HookStatus {
+  agent: "claude" | "codex";
+  name: string;
+  configPath: string;
+  configExists: boolean;
+  status: "installed" | "partial" | "missing" | "stale" | "error";
+  items: HookItem[];
+  binaryPath: string | null;
+  installedBinary: string | null;
+  binaryMissing: boolean;
+  lastEventMs: number | null;
+  message: string | null;
+}
+
 export interface IntegrationDescriptor { source: string; name: string; setup: string; events: string[]; }
 export interface KnownDevice { serialNumber: string | null; lastPort: string; ledCount: number; fwVersion: string; lastSeenMs: number; }
 

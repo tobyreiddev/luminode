@@ -16,6 +16,7 @@ mod commands;
 mod device;
 mod events;
 mod health;
+mod hooks;
 mod secrets;
 mod sources;
 mod store;
@@ -253,6 +254,8 @@ pub fn run() {
             commands::has_secret,
             commands::integration_health,
             commands::integration_catalog,
+            commands::hook_status,
+            commands::install_hooks,
             commands::known_devices,
             commands::firmware_compatibility,
         ])

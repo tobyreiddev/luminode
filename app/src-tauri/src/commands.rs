@@ -888,6 +888,26 @@ pub fn integration_health(state: State<AppState>) -> Vec<crate::health::Integrat
     state.health.snapshot()
 }
 
+/// Whether the Claude Code / Codex hooks that feed `lightctl` events are
+/// wired up, so Settings can say so instead of the README having to.
+#[tauri::command]
+pub fn hook_status(state: State<AppState>) -> Vec<crate::hooks::HookStatus> {
+    crate::hooks::status_all(|source| state.store.last_event_ms(source))
+}
+
+/// Write the missing hooks for one agent ("claude" or "codex") and report
+/// the resulting state.
+#[tauri::command]
+pub fn install_hooks(
+    state: State<AppState>,
+    agent: String,
+) -> Result<Vec<crate::hooks::HookStatus>, String> {
+    crate::hooks::install(&agent)?;
+    Ok(crate::hooks::status_all(|source| {
+        state.store.last_event_ms(source)
+    }))
+}
+
 #[tauri::command]
 pub fn integration_catalog() -> Vec<crate::catalog::IntegrationDescriptor> {
     crate::catalog::all()

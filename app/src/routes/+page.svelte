@@ -20,6 +20,7 @@
     type Trigger,
     type IntegrationHealth,
     type IntegrationDescriptor,
+    type HookStatus,
     type KnownDevice,
   } from "$lib/types";
 
@@ -65,6 +66,8 @@
   let events = $state<BusEvent[]>([]);
   let integrationHealth = $state<IntegrationHealth[]>([]);
   let integrationCatalog = $state<IntegrationDescriptor[]>([]);
+  let hookStatuses = $state<HookStatus[]>([]);
+  let installingHooks = $state<string | null>(null);
   let knownDevices = $state<KnownDevice[]>([]);
   let firmwareCompatibility = $state<{ currentProtocol: number | null; requiredProtocol: number; compatible: boolean; guidance: string } | null>(null);
 
@@ -527,7 +530,46 @@
   }
   async function refreshHealth() {
     integrationHealth = await invoke("integration_health");
+    hookStatuses = await invoke("hook_status");
     notify("Integration health refreshed");
+  }
+
+  // -- agent hooks (Claude Code / Codex) --
+  const HOOK_STATE_LABEL: Record<HookStatus["status"], string> = {
+    installed: "Connected",
+    partial: "Partly set up",
+    missing: "Not set up",
+    stale: "Needs repair",
+    error: "Config unreadable",
+  };
+  // "installed" is the only state that needs no button; the rest all write
+  // whatever is missing, so the verb is the only thing that differs.
+  function hookAction(h: HookStatus): string | null {
+    if (h.status === "error") return null;
+    if (h.status === "stale") return "Repair";
+    if (h.status === "partial") return "Finish setup";
+    if (h.status === "missing") return "Set up";
+    return null;
+  }
+  async function installHooks(agent: string) {
+    installingHooks = agent;
+    try {
+      hookStatuses = await invoke("install_hooks", { agent });
+      const done = hookStatuses.find((h) => h.agent === agent);
+      notify(`${done?.name ?? agent} hooks written — restart ${done?.name ?? agent} to pick them up`);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      installingHooks = null;
+    }
+  }
+  function fmtAgo(ts: number): string {
+    const mins = Math.round((Date.now() - ts) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return new Date(ts).toLocaleDateString();
   }
 
   // -- schedules --
@@ -657,6 +699,11 @@
         if (e.payload.source === "slack" || e.payload.source === "calendar") {
           invoke<IntegrationHealth[]>("integration_health").then((value) => (integrationHealth = value));
         }
+        // Hearing from an agent is the confirmation the config file can't
+        // give — refresh so "last event" goes live while you test it.
+        if (e.payload.source === "claude" || e.payload.source === "codex") {
+          invoke<HookStatus[]>("hook_status").then((value) => (hookStatuses = value));
+        }
       }),
     ];
     const onVisibility = () => invoke("set_preview_visible", { visible: !document.hidden });
@@ -680,6 +727,7 @@
         calendarSet = await invoke("has_secret", { name: "calendar_ics_url" });
         integrationHealth = await invoke("integration_health");
         integrationCatalog = await invoke("integration_catalog");
+        hookStatuses = await invoke("hook_status");
         knownDevices = await invoke("known_devices");
         firmwareCompatibility = await invoke("firmware_compatibility");
         canUndoImport = await invoke("can_undo_import");
@@ -1103,6 +1151,44 @@
           </div>
         </div>
 
+        <div class="section-head"><h2>Agent hooks</h2></div>
+        <div class="card">
+          <small class="dim">Claude Code and Codex report what they're doing by running <code>lightctl</code> on their own lifecycle events. Setup lives in their config files, so Luminode reads them here.</small>
+          {#each hookStatuses as hook (hook.agent)}
+            {@const action = hookAction(hook)}
+            <div class="hook {hook.status}">
+              <div class="hook-head">
+                <div>
+                  <div class="setting-name">{hook.name} <span class="hook-pill {hook.status}">{HOOK_STATE_LABEL[hook.status]}</span></div>
+                  <small class="dim mono">{hook.configPath}</small>
+                </div>
+                {#if action}
+                  <button class="pill-btn" disabled={installingHooks !== null || !hook.binaryPath} onclick={() => installHooks(hook.agent)}>
+                    {installingHooks === hook.agent ? "Writing…" : action}
+                  </button>
+                {:else if hook.lastEventMs}
+                  <small class="dim">last event {fmtAgo(hook.lastEventMs)}</small>
+                {/if}
+              </div>
+              <ul class="hook-items">
+                {#each hook.items as item (item.key)}
+                  <li class={item.state}>
+                    <span class="hook-mark">{item.state === "ours" ? "✓" : item.state === "foreign" ? "•" : "○"}</span>
+                    <span class="grow">{item.label}{#if item.optional && item.state !== "ours"}<span class="dim"> — optional</span>{/if}</span>
+                    {#if item.state === "foreign"}<small class="dim mono">taken by {item.command}</small>{/if}
+                  </li>
+                {/each}
+              </ul>
+              {#if hook.message}<small class="dim">{hook.message}</small>{/if}
+              {#if hook.status === "installed"}
+                <small class="dim">
+                  {#if hook.lastEventMs}Events arriving — the wiring works.{:else}No {hook.agent} event seen yet; restart {hook.name} if it was running.{/if}
+                </small>
+              {/if}
+            </div>
+          {/each}
+        </div>
+
         <div class="section-head"><h2>Integrations</h2><button class="pill-btn" onclick={refreshHealth}>Refresh</button></div>
         <div class="card">
           <div class="health-grid">
@@ -1353,6 +1439,19 @@
   .health-card { display: flex; flex-direction: column; gap: 3px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; }
   .health-card.healthy { border-color: var(--success); }
   .health-card.error { border-color: var(--danger); }
+  .hook { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; }
+  .hook.installed { border-color: var(--success); }
+  .hook.stale, .hook.error { border-color: var(--danger); }
+  .hook-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .hook-head button { flex: none; }
+  .hook-pill { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 999px; background: var(--surface-raised); color: var(--text-dim); vertical-align: 1px; }
+  .hook-pill.installed { color: var(--success); }
+  .hook-pill.stale, .hook-pill.error { color: var(--danger); }
+  .hook-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+  .hook-items li { display: flex; align-items: baseline; gap: 7px; }
+  .hook-items li.missing, .hook-items li.foreign { color: var(--text-dim); }
+  .hook-mark { width: 12px; color: var(--text-faint); }
+  .hook-items li.ours .hook-mark { color: var(--success); }
   .catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 10px; }
   .catalog-grid article { display: flex; flex-direction: column; gap: 3px; padding: 10px; background: var(--surface-raised); border-radius: 8px; }
   .advanced summary { cursor: pointer; font-weight: 600; font-size: 13px; }
